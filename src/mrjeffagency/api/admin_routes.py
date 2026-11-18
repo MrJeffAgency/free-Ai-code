@@ -98,13 +98,18 @@ def _asset_path(filename: str) -> Path:
 
 def _asset_response(filename: str) -> FileResponse:
     path = _asset_path(filename)
-    return FileResponse(path, media_type=_ADMIN_ASSET_MEDIA_TYPES[path.suffix])
+    return FileResponse(
+        path,
+        media_type=_ADMIN_ASSET_MEDIA_TYPES[path.suffix],
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def admin_page_response() -> HTMLResponse:
     template = _asset_path("index.html").read_text(encoding="utf-8")
     return HTMLResponse(
-        template.replace(_ADMIN_ASSET_VERSION_PLACEHOLDER, package_version())
+        template.replace(_ADMIN_ASSET_VERSION_PLACEHOLDER, package_version()),
+        headers={"Cache-Control": "no-store"},
     )
 
 

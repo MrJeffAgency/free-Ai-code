@@ -3,7 +3,7 @@ set -eu
 
 PACKAGE_NAME="mrjeffagency"
 MJA_HOME_DIRNAME=".mja"
-MJA_MACOS_BUNDLE_ID="io.github.alishahryar1.mrjeffagency"
+MJA_MACOS_BUNDLE_ID="io.github.MrJeffAgency.mrjeffagency"
 MJA_MACOS_OWNER_FILE=".mrjeffagency-owner"
 # Include retired entry points so older installations are fully stopped and removed.
 MJA_COMMANDS="mja-desktop mja-server mja-claude mja-codex mja-pi mja-opencode mja-cline mja-hermes mja-dsh mja-grok mja-muse mja-aider mja-agy mja-doctor mja-update mja-init mrjeffagency"

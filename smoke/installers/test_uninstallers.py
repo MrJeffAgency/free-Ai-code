@@ -250,7 +250,7 @@ printf '%s\n' "$FAKE_UNAME"
     contents = app / "Contents"
     contents.mkdir(parents=True)
     (contents / ".mrjeffagency-owner").write_text(
-        "io.github.alishahryar1.mrjeffagency\n",
+        "io.github.MrJeffAgency.mrjeffagency\n",
         encoding="utf-8",
     )
     desktop = home / "Desktop"

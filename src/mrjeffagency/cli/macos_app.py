@@ -16,7 +16,7 @@ from packaging.specifiers import SpecifierSet
 
 from mrjeffagency.cli.desktop_assets import export_app_icon
 
-BUNDLE_ID = "io.github.alishahryar1.mrjeffagency"
+BUNDLE_ID = "io.github.MrJeffAgency.mrjeffagency"
 OWNER_FILE = ".mrjeffagency-owner"
 
 
