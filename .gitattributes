@@ -1,0 +1,3 @@
+src/mrjeffagency/core/data/cl100k_base.tiktoken -text linguist-vendored=true
+scripts/update/mja-update text eol=lf
+scripts/update/*.cmd text eol=crlf
