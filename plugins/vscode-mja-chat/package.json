@@ -1,0 +1,41 @@
+{
+  "name": "mja-chat",
+  "displayName": "MrJeffAgency AI Chat",
+  "description": "Chat with any model configured in your local MJA server, right inside VS Code.",
+  "version": "1.0.0",
+  "publisher": "MrJeffAgency",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["AI", "Chat"],
+  "icon": "icon.png",
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "mja-chat.open", "title": "MJA Chat: Open" },
+      { "command": "mja-chat.setUrl", "title": "MJA Chat: Set server URL" },
+      { "command": "mja-chat.setModel", "title": "MJA Chat: Set model" },
+      { "command": "mja-chat.setToken", "title": "MJA Chat: Set token" }
+    ],
+    "configuration": {
+      "title": "MrJeffAgency AI Chat",
+      "properties": {
+        "mjaChat.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8082",
+          "description": "Base URL of the MJA server."
+        },
+        "mjaChat.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model id to use. Leave blank to use the server default."
+        },
+        "mjaChat.token": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token if Proxy Authentication is enabled in MJA."
+        }
+      }
+    }
+  },
+  "scripts": {}
+}

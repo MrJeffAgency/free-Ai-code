@@ -1,0 +1,16 @@
+{
+  "id": "mrjeffagency.mja-chat",
+  "name": "MrJeffAgency AI Chat",
+  "main": "main.js",
+  "version": "1.0.0",
+  "readme": "readme.md",
+  "icon": "icon.png",
+  "files": [],
+  "minVersionCode": 290,
+  "price": 0,
+  "author": {
+    "name": "MrJeffAgency",
+    "email": "",
+    "github": "MrJeffAgency"
+  }
+}
