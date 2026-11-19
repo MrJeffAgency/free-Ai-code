@@ -36,6 +36,20 @@ function openChat(context) {
   panel.webview.html = getHtml(cfg());
 
   panel.webview.onDidReceiveMessage(async (msg) => {
+    if (msg.type === "insert") {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage("Open a file in the editor first.");
+        panel.webview.postMessage({ type: "inserted", ok: false });
+        return;
+      }
+      let text = String(msg.text || "");
+      const fence = text.trim().match(/^```[a-zA-Z0-9_+-]*\n([\s\S]*?)\n```$/);
+      if (fence) text = fence[1];
+      await editor.edit((edit) => edit.insert(editor.selection.active, text));
+      panel.webview.postMessage({ type: "inserted", ok: true });
+      return;
+    }
     if (msg.type === "chat") {
       const settings = cfg();
       const history = msg.history || [];
@@ -116,19 +130,20 @@ function getHtml(config) {
 <body>
 <header>MrJeffAgency AI Chat <small id="info"></small></header>
 <div id="log"></div>
-<div id="row"><textarea id="in" rows="3" placeholder="Type a message…"></textarea><button id="send">Send</button></div>
+<div id="row"><textarea id="in" rows="3" placeholder="Type a message…"></textarea><button id="insert" title="Insert last reply into the active editor">Insert</button><button id="send">Send</button></div>
 <script>
   const vscode = acquireVsCodeApi();
   let config = ${c};
   let history = [];
   let busy = false;
+  let lastReply = '';
   const log = document.getElementById('log');
   const info = document.getElementById('info');
   const input = document.getElementById('in');
   function updateInfo() { info.textContent = 'model: ' + (config.model || '(server default)') + ' · ' + config.serverUrl; }
   function add(role, text) {
     const m = document.createElement('div'); m.className = 'msg';
-    const b = document.createElement('b'); b.textContent = role === 'user' ? 'You' : 'MJA';
+    const b = document.createElement('b'); b.textContent = role === 'user' ? 'You' : (role === 'system' ? 'System' : 'MJA');
     const d = document.createElement('div'); d.textContent = text;
     m.append(b, d); log.append(m); log.scrollTop = log.scrollHeight;
     return d;
@@ -150,8 +165,16 @@ function getHtml(config) {
       if (nodes.length) { nodes[nodes.length-1].textContent += m.text; log.scrollTop = log.scrollHeight; }
     }
     else if (m.type === 'error') { add('error', m.text); busy = false; }
-    else if (m.type === 'done') { history.push({role:'assistant', content:m.text}); busy = false; }
+    else if (m.type === 'done') { lastReply = m.text; history.push({role:'assistant', content:m.text}); busy = false; }
+    else if (m.type === 'inserted') {
+      if (m.ok) add('system', 'Inserted into editor.');
+      else add('system', 'Could not insert — open a file first.');
+    }
   });
+  document.getElementById('insert').onclick = () => {
+    if (!lastReply) { add('system', 'No reply to insert yet.'); return; }
+    vscode.postMessage({type:'insert', text: lastReply});
+  };
   document.getElementById('send').onclick = send;
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
   updateInfo();

@@ -21,7 +21,7 @@ Or install the packed `.vsix` via VS Code: **Extensions → ⋯ → Install from
 
 ## Usage
 
-Open the command palette (Ctrl+Shift+P) and run **MJA Chat: Open**. Type a message and press Enter (or click Send). Replies stream in as they arrive.
+Open the command palette (Ctrl+Shift+P) and run **MJA Chat: Open**. Type a message and press Enter (or click Send). Replies stream in as they arrive. Click **Insert** to place the last reply (or a lone code block) at your cursor in the active editor.
 
 Commands:
 - **MJA Chat: Open** – open the chat panel

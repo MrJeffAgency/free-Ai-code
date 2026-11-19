@@ -14,6 +14,6 @@ Command palette (Ctrl+Shift+P):
 - **MJA Chat: Set server URL** – change the MJA server address (default `http://127.0.0.1:8082`)
 - **MJA Chat: Set model** – choose a model id (leave blank to use the server default)
 
-Type a message and press Enter (or click Send). The reply streams in as it arrives.
+Type a message and press Enter (or click Send). The reply streams in as it arrives. Click **Insert into editor** to place the last reply (or a lone code block) at your cursor.
 
 The server URL and model are saved in localStorage. If Proxy Authentication is enabled in MJA, set the bearer token with **MJA Chat: Set token**.

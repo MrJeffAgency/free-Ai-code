@@ -68,6 +68,7 @@
     sel.onchange = () => { localStorage.setItem(K_MODEL, sel.value); };
     bar.append(modelLabel, sel,
       btn("Refresh", async () => { await loadModels(); render(); }),
+      btn("Insert into editor", insertLast),
       btn("Send", send, true),
       busy ? btn("Stop", stop) : el("span", ""));
 
@@ -101,6 +102,25 @@
   }
 
   let draft = "";
+
+  function insertLast() {
+    const last = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim());
+    if (!last) { window.toast && window.toast("No reply to insert yet", 2000); return; }
+    let text = last.content.trim();
+    // Strip a single surrounding markdown code fence so code is inserted cleanly.
+    const fence = text.match(/^```[a-zA-Z0-9_+-]*\n([\s\S]*?)\n```$/);
+    if (fence) text = fence[1];
+    try {
+      const ed = editorManager.editor;
+      const session = ed.session;
+      const cursor = ed.selection.getCursor();
+      session.insert(cursor, text);
+      ed.focus();
+      window.toast && window.toast("Inserted into editor", 2000);
+    } catch (e) {
+      window.toast && window.toast("Insert failed: " + ((e && e.message) || e), 3000);
+    }
+  }
 
   function stop() {
     if (controller) controller.abort();
