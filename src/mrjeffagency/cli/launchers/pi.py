@@ -62,6 +62,8 @@ SPEC = HarnessSpec(
         ("--version",),
         lambda output: version_at_least(output, _VERSION_PATTERN, (0, 80, 4)),
         "MJA requires Pi 0.80.4 or newer for provider request headers.",
+        # Node startup can exceed the 5s default on slow/loaded Android hosts.
+        timeout_seconds=30.0,
     ),
 )
 

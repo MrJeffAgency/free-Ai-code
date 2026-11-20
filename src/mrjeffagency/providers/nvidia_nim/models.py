@@ -70,5 +70,16 @@ HOSTED_MODEL_EXCLUSIONS = frozenset(
         "nvidia/ai-synthetic-video-detector",
         "nvidia/llama-nemotron-embed-vl-1b-v2",
         "nvidia/nemotron-3-embed-1b",
+        # Non-chat services that reject chat/completions with HTTP 422
+        # ("invalid extraction request"), checked 2026-11-20. Hiding them
+        # keeps them out of model pickers where they cannot be used.
+        "fastino/gliner2-pii",
+        "nvidia/ising-calibration-1.5-31b",
+        "nvidia/llama-3.1-nemoguard-8b-topic-control",
+        "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+        "nvidia/nemotron-3.5-content-safety",
+        "nvidia/nemotron-3.5-embed-1b",
+        "nvidia/nemotron-3.5-embed-8b",
+        "nvidia/riva-translate-4b-instruct-v2",
     }
 )
