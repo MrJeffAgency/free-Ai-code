@@ -4,7 +4,7 @@ Chat with any model configured in your local MJA server, directly inside VS Code
 
 ## Requirements
 
-- A running MJA server at `http://127.0.0.1:8082` with at least one provider key configured.
+- A running MJA server at `http://127.0.0.1:8083` with at least one provider key configured.
 - VS Code 1.90 or newer.
 
 ## Install

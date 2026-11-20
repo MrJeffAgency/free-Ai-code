@@ -6,7 +6,7 @@ let currentPanel = null;
 function cfg() {
   const c = vscode.workspace.getConfiguration("mjaChat");
   return {
-    serverUrl: String(c.get("serverUrl") || "http://127.0.0.1:8082").replace(/\/$/, ""),
+    serverUrl: String(c.get("serverUrl") || "http://127.0.0.1:8083").replace(/\/$/, ""),
     model: String(c.get("model") || ""),
     token: String(c.get("token") || ""),
   };
@@ -15,7 +15,7 @@ function cfg() {
 async function setSetting(key, prompt) {
   const c = vscode.workspace.getConfiguration("mjaChat");
   const current = String(c.get(key) || "");
-  const value = await vscode.window.showInputBox({ prompt, value: current, placeHolder: key === "serverUrl" ? "http://127.0.0.1:8082" : "" });
+  const value = await vscode.window.showInputBox({ prompt, value: current, placeHolder: key === "serverUrl" ? "http://127.0.0.1:8083" : "" });
   if (value !== undefined) {
     await c.update(key, value, vscode.ConfigurationTarget.Global);
     if (currentPanel) currentPanel.webview.postMessage({ type: "config", config: cfg() });

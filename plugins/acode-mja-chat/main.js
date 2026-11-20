@@ -13,7 +13,7 @@
   let controller = null;      // AbortController for active stream
   let models = [];
 
-  const url = () => localStorage.getItem(K_URL) || "http://127.0.0.1:8082";
+  const url = () => localStorage.getItem(K_URL) || "http://127.0.0.1:8083";
   const model = () => localStorage.getItem(K_MODEL) || "";
   const token = () => localStorage.getItem(K_TOKEN) || "";
 
@@ -203,7 +203,7 @@
 
   async function setUrl() {
     const prompt = acode.require("prompt");
-    const v = await prompt("MJA server URL", url(), "text", { placeholder: "http://127.0.0.1:8082" });
+    const v = await prompt("MJA server URL", url(), "text", { placeholder: "http://127.0.0.1:8083" });
     if (v) { localStorage.setItem(K_URL, v.replace(/\/$/, "")); await loadModels(); if (page) render(); }
   }
 

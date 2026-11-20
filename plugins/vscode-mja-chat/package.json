@@ -21,7 +21,7 @@
       "properties": {
         "mjaChat.serverUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:8082",
+          "default": "http://127.0.0.1:8083",
           "description": "Base URL of the MJA server."
         },
         "mjaChat.model": {
