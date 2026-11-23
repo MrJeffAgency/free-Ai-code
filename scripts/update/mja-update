@@ -1,4 +1,22 @@
 #!/bin/sh
 set -eu
+
+# Prefer the installer from the local source checkout when available. This
+# makes local fixes take effect immediately and limits GitHub to actual
+# release downloads. Installed binaries without a checkout still bootstrap
+# from the published main branch.
+self=$0
+if command -v readlink >/dev/null 2>&1; then
+    resolved=$(readlink -f "$self" 2>/dev/null) && [ -n "$resolved" ] && self=$resolved
+fi
+script_dir=$(CDPATH= cd -- "$(dirname -- "$self")" 2>/dev/null && pwd -P) || script_dir=""
+repo_root=""
+if [ -n "$script_dir" ]; then
+    repo_root=$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null) || repo_root=""
+fi
+if [ -n "$repo_root" ] && [ -f "$repo_root/scripts/install.sh" ]; then
+    exec sh "$repo_root/scripts/install.sh" --update "$@"
+fi
+
 installer=$(curl -fsSL "https://raw.githubusercontent.com/MrJeffAgency/free-Ai-code/main/scripts/install.sh")
 exec sh -c "$installer" sh --update "$@"

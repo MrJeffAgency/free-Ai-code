@@ -2103,7 +2103,24 @@ function Invoke-SelectedReleaseInstaller {
                 $response.BaseResponse.ResponseUri.AbsoluteUri
             } else { $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri }
             $prefix = "$releaseBase/tag/v"
-            if (-not $selectedUrl.StartsWith($prefix, [StringComparison]::Ordinal)) { throw "GitHub returned an unexpected MJA release URL." }
+            if (-not $selectedUrl.StartsWith($prefix, [StringComparison]::Ordinal)) {
+                if ($selectedUrl.TrimEnd('/') -eq $releaseBase.TrimEnd('/')) {
+                    Write-Host @"
+No published MJA releases were found for this repository.
+
+Nothing is broken - automatic updates simply have no release to install yet.
+This is normal for a fresh fork/rebrand before its first release.
+
+Update a source checkout manually with:
+  cd ~/free-Ai-code; git pull
+
+To enable mja-update, publish a release tagged vX.Y.Z at:
+  https://github.com/MrJeffAgency/free-Ai-code/releases/new
+"@
+                    return
+                }
+                throw "GitHub returned an unexpected MJA release URL: $selectedUrl"
+            }
             $MjaInstallVersion = $selectedUrl.Substring($prefix.Length)
             if ($MjaInstallVersion -cnotmatch $MjaReleasePattern) { throw "GitHub did not return a canonical MJA release version." }
         }

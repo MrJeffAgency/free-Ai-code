@@ -1797,6 +1797,22 @@ mja_update_is_needed() {
     printf 'MJA update available: %s -> %s.\n' "$installed" "$mja_install_version"
 }
 
+print_no_releases_hint() {
+    cat >&2 <<'EOF'
+No published MJA releases were found for this repository.
+
+Nothing is broken — automatic updates simply have no release to install yet.
+This is normal for a fresh fork/rebrand before its first release.
+
+Update a source checkout manually with:
+  cd ~/free-Ai-code && git pull
+
+To enable mja-update, publish a release tagged vX.Y.Z at:
+  https://github.com/MrJeffAgency/free-Ai-code/releases/new
+EOF
+    exit 0
+}
+
 dispatch_release() {
     release_base="https://github.com/MrJeffAgency/free-Ai-code/releases"
     if [ -z "$mja_install_version" ]; then
@@ -1804,7 +1820,8 @@ dispatch_release() {
             fail "Could not resolve the latest completed MJA release."
         case "$selected_url" in
             "$release_base/tag/v"[0-9]*) mja_install_version=${selected_url#"$release_base/tag/v"} ;;
-            *) fail "GitHub returned an unexpected MJA release URL." ;;
+            "$release_base"|"$release_base/") print_no_releases_hint ;;
+            *) fail "GitHub returned an unexpected MJA release URL: $selected_url" ;;
         esac
         validate_args
     fi
