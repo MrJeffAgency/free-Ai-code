@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette.exceptions import HTTPException
+from starlette.middleware.cors import CORSMiddleware
 
 from mrjeffagency.application.code_sessions import (
     CodeConflictError,
@@ -52,6 +53,22 @@ def create_app(services: ApiServices) -> FastAPI:
     """Create the HTTP adapter around explicitly supplied runtime services."""
     app = FastAPI(title="Claude Code Proxy", version=package_version())
     app.state.services = services
+    # Local web apps (e.g. the MJA Assistant Android WebView) load from a
+    # different origin and need CORS to reach the local generation API.
+    # Admin routes keep their own strict loopback/Origin checks.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["null", "capacitor://localhost", "file://"],
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "Anthropic-Version",
+            "X-Requested-With",
+        ],
+        allow_credentials=False,
+    )
     app.add_middleware(AdminNoStoreMiddleware)
     app.add_middleware(ClientRequestLifetimeMiddleware)
     app.add_middleware(RequestOutcomeMiddleware)
