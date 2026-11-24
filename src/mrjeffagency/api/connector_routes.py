@@ -7,27 +7,36 @@ Android app asks for tool definitions, executes the tool-call loop, and calls
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
 import secrets
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from mrjeffagency.config.paths import config_dir_path
 
-from .dependencies import require_proxy_auth
+from .dependencies import get_services, require_proxy_auth
+from .ports import ApiServices
 
 router = APIRouter(prefix="/v1/connectors", tags=["mja-connectors"])
 
 _STORE_PATH = config_dir_path() / "connectors.json"
 _STATE_PATH = config_dir_path() / "connector_oauth_states.json"
+_MEDIA_DIR = config_dir_path() / "media"
 _CALLBACK_BASE = os.getenv("MJA_CONNECTOR_CALLBACK_BASE", "http://127.0.0.1:8083").rstrip("/")
 _CALLBACK_URL = f"{_CALLBACK_BASE}/v1/connectors/oauth/callback"
+_POLLINATIONS_BASE = "https://gen.pollinations.ai"
+_POLLINATIONS_IMAGE_BASE = "https://image.pollinations.ai"
+_SAFE_MEDIA_NAME = re.compile(r"^[A-Za-z0-9_-]+\.mp4$")
 
 CREDENTIAL_KEYS: dict[str, tuple[str, ...]] = {
     "google_drive": (
@@ -38,6 +47,7 @@ CREDENTIAL_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "shopify": ("shop", "access_token"),
     "whatsapp": ("phone_number_id", "access_token"),
+    "pollinations": ("api_key",),
 }
 
 REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
@@ -45,6 +55,7 @@ REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "spotify": ("access_token",),
     "shopify": ("shop", "access_token"),
     "whatsapp": ("phone_number_id", "access_token"),
+    "pollinations": ("api_key",),
 }
 
 CONNECTOR_NAMES = {
@@ -52,6 +63,8 @@ CONNECTOR_NAMES = {
     "spotify": "Spotify",
     "shopify": "Shopify",
     "whatsapp": "WhatsApp by Agent Messenger",
+    "pollinations": "Pollinations AI",
+    "opencode": "OpenCode Free",
 }
 
 OAUTH_CONFIG = {
@@ -184,6 +197,60 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "pollinations_generate_image",
+            "description": (
+                "Create an image from a text prompt. Free no-key mode is available. "
+                "Returns a public image URL that can be displayed in chat."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Detailed image description."},
+                    "width": {"type": "integer", "description": "Image width, 256-1536."},
+                    "height": {"type": "integer", "description": "Image height, 256-1536."},
+                    "model": {
+                        "type": "string",
+                        "description": "Optional Pollinations image model ID.",
+                    },
+                    "seed": {"type": "integer", "description": "Optional seed for repeatable results."},
+                },
+                "required": ["prompt"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pollinations_generate_video",
+            "description": (
+                "Create a short MP4 video from a text prompt. With no API key it makes an "
+                "animated AI image video on the device; with a Pollinations key it uses "
+                "true AI video generation. Returns a video URL for chat playback."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Detailed video description."},
+                    "duration": {"type": "integer", "description": "Seconds, 2-8."},
+                    "model": {
+                        "type": "string",
+                        "description": "Optional Pollinations video model ID for AI video mode.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["auto", "ai", "slideshow"],
+                        "description": "auto uses AI video when a key is saved, otherwise slideshow.",
+                    },
+                },
+                "required": ["prompt"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 TOOL_CONNECTOR = {
@@ -243,6 +310,191 @@ async def _http(method: str, url: str, **kwargs: Any) -> Any:
         return {"text": response.text[:2000]}
 
 
+def _pollinations_api_key() -> str:
+    stored = _credentials().get("pollinations", {})
+    return str(
+        os.getenv("POLLINATIONS_API_KEY", "")
+        or (stored.get("api_key", "") if isinstance(stored, dict) else "")
+    ).strip()
+
+
+def _pollinations_headers() -> dict[str, str]:
+    headers = {"User-Agent": "MJA-Assistant"}
+    key = _pollinations_api_key()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
+
+
+def _enclosure_url(response: httpx.Response) -> str:
+    for part in response.headers.get("link", "").split(","):
+        if "rel=enclosure" in part.replace('"', ""):
+            match = re.search(r"<([^>]+)>", part)
+            if match:
+                return match.group(1)
+    return str(response.url)
+
+
+async def _pollinations_image_bytes(
+    prompt: str,
+    *,
+    width: int = 768,
+    height: int = 768,
+    model: str = "black-forest-labs/flux.1-schnell",
+    seed: int | None = None,
+) -> tuple[bytes, str, str]:
+    params: dict[str, Any] = {
+        "width": max(256, min(width, 1536)),
+        "height": max(256, min(height, 1536)),
+        "model": model,
+        "nologo": "true",
+    }
+    if seed is not None:
+        params["seed"] = int(seed)
+    has_key = bool(_pollinations_api_key())
+    path = "image" if has_key else "prompt"
+    base = _POLLINATIONS_BASE if has_key else _POLLINATIONS_IMAGE_BASE
+    url = f"{base}/{path}/{quote(prompt, safe='')}"
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        response = await client.get(url, params=params, headers=_pollinations_headers())
+        if response.status_code == 402 and not has_key and "FREE_LIMIT" in response.text:
+            await asyncio.sleep(46)
+            response = await client.get(url, params=params, headers=_pollinations_headers())
+    if response.status_code >= 400:
+        detail = response.text[:300].replace("\n", " ")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Pollinations image HTTP {response.status_code}: {detail}",
+        )
+    content_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0]
+    return response.content, content_type, _enclosure_url(response)
+
+
+def _save_media(data: bytes, suffix: str) -> Path:
+    _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    path = _MEDIA_DIR / f"{uuid.uuid4().hex}{suffix}"
+    path.write_bytes(data)
+    os.chmod(path, 0o600)
+    return path
+
+
+def _media_url(path: Path) -> str:
+    return f"{_CALLBACK_BASE}/v1/connectors/media/{path.name}"
+
+
+async def _slideshow_video(prompt: str, duration: int) -> dict[str, Any]:
+    image_bytes, _, _ = await _pollinations_image_bytes(
+        prompt, width=1024, height=576
+    )
+    image_path = _save_media(image_bytes, ".jpg")
+    output_path = _MEDIA_DIR / f"{uuid.uuid4().hex}.mp4"
+    frames = max(30, int(duration) * 30)
+    fade_out = max(0.0, float(duration) - 0.6)
+    video_filter = (
+        "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,"
+        f"zoompan=z='min(zoom+0.0015,1.25)':d={frames}:s=1280x720:fps=30,"
+        f"fade=t=in:st=0:d=0.6,fade=t=out:st={fade_out}:d=0.6,format=yuv420p"
+    )
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-y", "-loglevel", "error", "-loop", "1", "-i", str(image_path),
+        "-vf", video_filter, "-t", str(duration), "-c:v", "libx264",
+        "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(output_path),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    image_path.unlink(missing_ok=True)
+    if process.returncode != 0:
+        output_path.unlink(missing_ok=True)
+        detail = stderr.decode("utf-8", "replace")[-300:].replace("\n", " ")
+        raise HTTPException(status_code=502, detail=f"ffmpeg failed: {detail}")
+    return {
+        "ok": True,
+        "media": {
+            "type": "video",
+            "url": _media_url(output_path),
+            "title": "AI image video",
+        },
+        "provider": "pollinations + ffmpeg",
+        "mode": "slideshow",
+        "prompt": prompt,
+        "duration": duration,
+    }
+
+
+async def _ai_video(prompt: str, duration: int, model: str) -> dict[str, Any]:
+    url = f"{_POLLINATIONS_BASE}/video/{quote(prompt, safe='')}"
+    params = {"model": model, "duration": duration}
+    async with httpx.AsyncClient(timeout=180, follow_redirects=True) as client:
+        response = await client.get(
+            url, params=params, headers=_pollinations_headers() | {"Prefer": "respond-async"}
+        )
+        if response.status_code in (401, 402):
+            raise HTTPException(
+                status_code=400,
+                detail="True AI video needs a Pollinations key. Add it in Connector settings or use slideshow mode.",
+            )
+        if response.status_code >= 400:
+            detail = response.text[:300].replace("\n", " ")
+            raise HTTPException(
+                status_code=502, detail=f"Pollinations video HTTP {response.status_code}: {detail}"
+            )
+        if response.status_code == 200:
+            path = _save_media(response.content, ".mp4")
+            return {
+                "ok": True,
+                "media": {"type": "video", "url": _media_url(path), "title": "AI video"},
+                "provider": "pollinations",
+                "mode": "ai",
+                "prompt": prompt,
+                "duration": duration,
+                "model": model,
+            }
+
+        try:
+            job_id = str(response.json().get("id", ""))
+        except ValueError:
+            job_id = ""
+        if not job_id:
+            raise HTTPException(status_code=502, detail="Pollinations video job did not return an id")
+
+        deadline = time.monotonic() + 150
+        while time.monotonic() < deadline:
+            await asyncio.sleep(3)
+            status_response = await client.get(
+                f"{_POLLINATIONS_BASE}/v1/jobs/{job_id}", headers=_pollinations_headers()
+            )
+            if status_response.status_code >= 400:
+                detail = status_response.text[:300].replace("\n", " ")
+                raise HTTPException(
+                    status_code=502, detail=f"Pollinations job HTTP {status_response.status_code}: {detail}"
+                )
+            payload = status_response.json()
+            status = str(payload.get("status", "")).lower()
+            if status in {"failed", "error", "cancelled"}:
+                raise HTTPException(status_code=502, detail=f"Pollinations video failed: {payload}")
+            if status in {"succeeded", "completed", "done"}:
+                result_url = str(
+                    payload.get("result_url") or payload.get("url") or payload.get("result", "")
+                )
+                if not result_url:
+                    raise HTTPException(status_code=502, detail="Pollinations job finished without a result URL")
+                result = await client.get(result_url, headers=_pollinations_headers())
+                if result.status_code >= 400:
+                    raise HTTPException(status_code=502, detail=f"Video result HTTP {result.status_code}")
+                path = _save_media(result.content, ".mp4")
+                return {
+                    "ok": True,
+                    "media": {"type": "video", "url": _media_url(path), "title": "AI video"},
+                    "provider": "pollinations",
+                    "mode": "ai",
+                    "prompt": prompt,
+                    "duration": duration,
+                    "model": model,
+                    "job_id": job_id,
+                }
+    raise HTTPException(status_code=504, detail="Pollinations video timed out")
+
+
 async def _fresh_access_token(name: str) -> str:
     creds = _credentials().get(name, {})
     token = str(creds.get("access_token", "")).strip()
@@ -292,23 +544,37 @@ async def _fresh_access_token(name: str) -> str:
 
 
 @router.get("")
-async def list_connectors(_auth=Depends(require_proxy_auth)) -> dict[str, Any]:
+async def list_connectors(
+    _auth=Depends(require_proxy_auth),
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
     store = _credentials()
+    settings = services.requests.current_settings()
+    opencode_ready = bool(getattr(settings, "opencode_api_keys", ()))
+    connectors = [
+        {
+            "id": name,
+            "name": CONNECTOR_NAMES[name],
+            "configured": _configured(name, store),
+            "tools": [
+                tool["function"]["name"]
+                for tool in TOOLS
+                if TOOL_CONNECTOR[tool["function"]["name"]] == name
+            ],
+        }
+        for name in CREDENTIAL_KEYS
+    ]
+    connectors.append(
+        {
+            "id": "opencode",
+            "name": CONNECTOR_NAMES["opencode"],
+            "configured": opencode_ready,
+            "tools": [],
+        }
+    )
     return {
         "callback_url": _CALLBACK_URL,
-        "connectors": [
-            {
-                "id": name,
-                "name": CONNECTOR_NAMES[name],
-                "configured": _configured(name, store),
-                "tools": [
-                    tool["function"]["name"]
-                    for tool in TOOLS
-                    if TOOL_CONNECTOR[tool["function"]["name"]] == name
-                ],
-            }
-            for name in CREDENTIAL_KEYS
-        ],
+        "connectors": connectors,
         "tools": TOOLS,
     }
 
@@ -335,6 +601,31 @@ async def save_credentials(
     store[name] = current
     _save(_STORE_PATH, store)
     return {"connector": name, "configured": _configured(name, store)}
+
+
+@router.post("/opencode/setup")
+async def setup_opencode(
+    payload: dict[str, Any] = Body(...),
+    _auth=Depends(require_proxy_auth),
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """Install a free OpenCode key through the managed config runtime."""
+    api_key = str(payload.get("api_key", "")).strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="OpenCode API key is required")
+    result = await services.admin.apply_admin_config({"OPENCODE_API_KEY": api_key})
+    return {"connector": "opencode", "result": result}
+
+
+@router.get("/media/{name}")
+async def get_media(name: str) -> FileResponse:
+    if not _SAFE_MEDIA_NAME.fullmatch(name):
+        raise HTTPException(status_code=404, detail="Media not found")
+    path = _MEDIA_DIR / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Media not found")
+    media_type = "video/mp4" if name.endswith(".mp4") else "image/jpeg"
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.delete("/credentials/{name}")
@@ -531,6 +822,42 @@ async def _whatsapp(tool: str, args: dict[str, Any], name: str) -> dict[str, Any
     return {"ok": True, "data": await _http("POST", url, headers=headers, json=body)}
 
 
+async def _pollinations(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    prompt = str(args.get("prompt", "")).strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    if tool == "pollinations_generate_image":
+        data, content_type, url = await _pollinations_image_bytes(
+            prompt,
+            width=int(args.get("width", 768)),
+            height=int(args.get("height", 768)),
+            model=str(args.get("model", "black-forest-labs/flux.1-schnell")),
+            seed=args.get("seed"),
+        )
+        _ = data
+        return {
+            "ok": True,
+            "media": {"type": "image", "url": url, "title": "AI image"},
+            "provider": "pollinations",
+            "content_type": content_type,
+            "prompt": prompt,
+        }
+
+    duration = max(2, min(int(args.get("duration", 4)), 8))
+    mode = str(args.get("mode", "auto")).lower()
+    if mode == "auto":
+        mode = "ai" if _pollinations_api_key() else "slideshow"
+    if mode == "ai":
+        return await _ai_video(
+            prompt,
+            duration,
+            str(args.get("model", "kwaivgi/kling-v4.0-flash")),
+        )
+    if mode != "slideshow":
+        raise HTTPException(status_code=400, detail="mode must be auto, ai, or slideshow")
+    return await _slideshow_video(prompt, duration)
+
+
 @router.post("/invoke")
 async def invoke(
     payload: dict[str, Any] = Body(...),
@@ -545,9 +872,11 @@ async def invoke(
         raise HTTPException(status_code=400, detail=f"Unknown tool: {tool}")
 
     store = _credentials()
-    if not _configured(name, store):
+    if name != "pollinations" and not _configured(name, store):
         raise HTTPException(status_code=400, detail=f"{CONNECTOR_NAMES[name]} is not configured")
 
+    if name == "pollinations":
+        return await _pollinations(tool, args)
     if name == "google_drive":
         return await _google_drive(tool, args, name)
     if name == "spotify":
