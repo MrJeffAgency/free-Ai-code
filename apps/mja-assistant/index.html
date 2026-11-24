@@ -282,6 +282,9 @@
         <h3 style="margin:0">🧩 Tool plug</h3>
         <p style="color:var(--muted);font-size:12px;margin:0">Turn app tools on or off.</p>
         <div id="toolList"></div>
+        <h3 style="margin:14px 0 0">🔌 Available plugs</h3>
+        <p style="color:var(--muted);font-size:12px;margin:0">Services MJA Assistant can reference while working. Direct access needs credentials or a connected tool.</p>
+        <div id="plugList"></div>
       </div>
     </section>
 
@@ -406,6 +409,7 @@
     ["voice","Voice input","Microphone button in chat."],
     ["upload","File upload","+ button to attach files."],
     ["code","Code actions","Explain, fix, optimize, test code."],
+    ["plugs","Plug awareness","Know the service names available for planning work."],
     ["notes","Notes","Local notes and Ask AI."]
   ];
   const TOOLS=[
@@ -415,8 +419,25 @@
     ["artifact","💾 Artifacts","Save results for later."],
     ["recent","🕘 Recents","Reopen earlier chats."]
   ];
+  const PLUGS=[
+    ["Google Drive","Cloud files and documents."],
+    ["Canva","Visual design and social graphics."],
+    ["Supabase","Database, auth, storage, and edge functions."],
+    ["Fiverr","Freelance services and gigs."],
+    ["Vercel","Web hosting, previews, and deploys."],
+    ["Netlify","Web hosting, forms, and deploys."],
+    ["Base44","App and workflow building."],
+    ["Replit","Online coding, running, and deploying projects."],
+    ["Crypto.com","Crypto account, payments, and portfolio tasks."],
+    ["Wix","Website building and publishing."],
+    ["Acode / Termux","On-device code editing and terminal work."],
+    ["Android Builder","Build signed Android APK and AAB packages."],
+    ["Bill","Billing and invoice work."],
+    ["GitHub","Repositories, commits, issues, and releases."]
+  ];
 
-  let caps=ls(K.caps,null);if(!caps||typeof caps!=="object"){caps={};CAPS.forEach(c=>caps[c[0]]=true)}
+  let caps=ls(K.caps,null);if(!caps||typeof caps!=="object"){caps={}}
+  CAPS.forEach(c=>{if(typeof caps[c[0]]!=="boolean")caps[c[0]]=true});
   let tools=ls(K.tools,null);if(!tools||typeof tools!=="object"){tools={};TOOLS.forEach(t=>tools[t[0]]=true)}
   let modeName=ls(K.mode,"General");if(!MODES[modeName])modeName="General";
   let prof=ls(K.profile,{name:"MrJeff",tag:"Powered by MJA · MrJeffAgency"});
@@ -506,7 +527,13 @@
     setDot(false);throw networkError(errs,sawHTTP);
   }
   function setDot(on){$("dot").classList.toggle("on",!!on);$("connDot").classList.toggle("on",!!on)}
-  function sysPrompt(){return MODES[modeName]||MODES.General}
+  function plugContext(){
+    if(!caps.plugs)return "";
+    return " Available plugs you may reference when planning, explaining, or breaking down work: "+
+      PLUGS.map(p=>p[0]).join(", ")+
+      ". You do not have direct access to any plug unless the user provides credentials, files, or a connected tool.";
+  }
+  function sysPrompt(){return (MODES[modeName]||MODES.General)+plugContext()}
 
   async function loadModels(show){
     const sel=$("modelSel");
@@ -777,6 +804,16 @@
         '<label class="switch"><input type="checkbox" data-tool="'+t[0]+'"'+(tools[t[0]]?" checked":"")+'><span class="slider"></span></label></div>';
       tl.appendChild(d)});
     tl.querySelectorAll("[data-tool]").forEach(x=>x.onchange=()=>{tools[x.dataset.tool]=x.checked;save(K.tools,tools);applyToggles()});
+    drawPlugs();
+  }
+  function drawPlugs(){
+    const box=$("plugList");if(!box)return;
+    box.innerHTML="";
+    PLUGS.forEach(p=>{
+      const d=document.createElement("div");d.className="listitem";
+      d.innerHTML="<b>"+esc(p[0])+"</b><span>"+esc(p[1])+" Reference in chat; direct access needs credentials or a connector.</span>";
+      box.appendChild(d);
+    });
   }
   function applyToggles(){
     $("attachBtn").style.display=tools.attach?"":"none";
@@ -811,7 +848,8 @@
       '<span class="pill">🕘 '+recents.length+' recent chats</span>'+
       '<span class="pill">📦 '+artifacts.length+' artifacts</span>'+
       '<span class="pill">📝 '+notes.length+' notes</span>'+
-      '<span class="pill">🤖 '+modelList.length+' models</span>';
+      '<span class="pill">🤖 '+modelList.length+' models</span>'+
+      '<span class="pill">🔌 '+PLUGS.length+' plugs</span>';
   }
   $("profSave").onclick=()=>{prof={name:$("profName").value.trim()||"You",tag:$("profTag").value.trim()};
     save(K.profile,prof);drawProfile();drawChat();toast("Profile saved")};
