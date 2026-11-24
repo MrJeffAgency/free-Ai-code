@@ -46,7 +46,7 @@
 
   /* chat */
   .bar{display:flex;gap:7px;align-items:center;padding:8px 11px;border-bottom:1px solid var(--line);flex:0 0 auto;flex-wrap:wrap}
-  select,input[type=text]{background:var(--panel2);color:var(--text);border:1px solid var(--line);
+  select,input[type=text],input[type=password]{background:var(--panel2);color:var(--text);border:1px solid var(--line);
     border-radius:9px;padding:8px 10px;font-size:13px;outline:none;min-width:0}
   select{flex:1;min-width:110px;max-width:100%}
   .btn{background:var(--accent);color:#0b0e14;border:0;border-radius:9px;padding:8px 12px;font-weight:700;font-size:13px}
@@ -64,6 +64,10 @@
   body[data-theme="light"] .msg pre{background:#f1f5f9}
   .msgcode{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .msgtools{display:flex;gap:6px;margin-top:8px}
+  .thinking{background:var(--panel2);border:1px dashed var(--line);border-radius:10px;padding:8px 10px;
+    margin:6px 0;font-size:12px;color:var(--muted);white-space:normal}
+  .thinking summary{cursor:pointer;font-weight:700;color:var(--accent2);outline:none}
+  .thinking > div{margin-top:6px;line-height:1.5}
   .copy,.minibtn{background:var(--panel2);border:1px solid var(--line);color:var(--muted);
     border-radius:6px;font-size:11px;padding:3px 7px}
   .empty{text-align:center;color:var(--muted);margin:auto;padding:20px;line-height:1.6}
@@ -267,12 +271,23 @@
           <div class="row"><div><h3 style="margin:0">MJA Server</h3><p id="connStatus">Checking…</p></div><span class="dot" id="connDot"></span></div>
           <div class="flex" style="margin-top:9px">
             <button class="btn sm" id="connTest">Test connection</button>
+            <button class="btn ghost sm" id="openConnectorSettings">Connector settings</button>
             <button class="btn ghost sm" data-url="http://127.0.0.1:8083">Use 127.0.0.1</button>
             <button class="btn ghost sm" data-url="http://localhost:8083">Use localhost</button>
           </div>
           <p class="hint" id="connDetail"></p>
         </div>
         <div class="card"><h3 style="margin:0">Providers / models</h3><div id="providerList"></div></div>
+      </div>
+    </section>
+
+    <!-- CONNECTOR SETTINGS -->
+    <section class="view" id="view-connectorsettings">
+      <div class="pane">
+        <h3 style="margin:0">🔐 Connector settings</h3>
+        <p style="color:var(--muted);font-size:12px;margin:0">Store an API key or token for each plug locally in this app. Credentials are not sent to MJA or any service by this version.</p>
+        <p style="color:var(--muted);font-size:12px;margin:0">The AI is told which connectors have saved credentials, but it still needs a connected tool before direct access.</p>
+        <div id="connectorSettingList"></div>
       </div>
     </section>
 
@@ -365,6 +380,7 @@
     <button class="mitem" data-go="recents"><span class="ic">🕘</span> Recents</button>
     <button class="mitem" data-go="artifacts"><span class="ic">📦</span> Artifacts</button>
     <button class="mitem" data-go="connectors"><span class="ic">🔌</span> Connectors</button>
+    <button class="mitem" data-go="connectorsettings"><span class="ic">🔐</span> Connector settings</button>
     <button class="mitem" data-go="tools"><span class="ic">🧩</span> Tool plug</button>
     <button class="mitem" data-go="caps"><span class="ic">✨</span> Capabilities</button>
     <button class="mitem" data-go="aimode"><span class="ic">🤖</span> Change AI mode</button>
@@ -380,7 +396,7 @@
   "use strict";
   const K={url:"mja.url",model:"mja.model",token:"mja.token",notes:"mja.notes",chat:"mja.chat",
     recents:"mja.recents",artifacts:"mja.artifacts",theme:"mja.theme",mode:"mja.mode",
-    profile:"mja.profile",caps:"mja.caps",tools:"mja.tools"};
+    profile:"mja.profile",caps:"mja.caps",tools:"mja.tools",connectors:"mja.connectors"};
   const $=id=>document.getElementById(id);
   const ls=(k,d)=>{try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch(e){return d}};
   const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
@@ -409,6 +425,7 @@
     ["voice","Voice input","Microphone button in chat."],
     ["upload","File upload","+ button to attach files."],
     ["code","Code actions","Explain, fix, optimize, test code."],
+    ["thinking","Thinking view","Show the model's reasoning before the answer."],
     ["plugs","Plug awareness","Know the service names available for planning work."],
     ["notes","Notes","Local notes and Ask AI."]
   ];
@@ -433,7 +450,18 @@
     ["Acode / Termux","On-device code editing and terminal work."],
     ["Android Builder","Build signed Android APK and AAB packages."],
     ["Bill","Billing and invoice work."],
-    ["GitHub","Repositories, commits, issues, and releases."]
+    ["GitHub","Repositories, commits, issues, and releases."],
+    ["Spotify","Music streaming, playlists, and listening history."],
+    ["Shopify","Store products, orders, and checkout work."],
+    ["Manus","Autonomous agent tasks and research."],
+    ["WhatsApp by Agent Messenger","WhatsApp messaging through Agent Messenger."],
+    ["Relationship reply coach","Draft thoughtful relationship replies."],
+    ["Mobile app builder","Plan and build mobile apps."],
+    ["Lovable","AI app and website generation."],
+    ["Railway","Backend services, databases, and deploys."],
+    ["Sleep Cycle","Sleep tracking and routine insights."],
+    ["Shazam","Song recognition and music discovery."],
+    ["Idealista","Property listings and real-estate search."]
   ];
 
   let caps=ls(K.caps,null);if(!caps||typeof caps!=="object"){caps={}}
@@ -444,6 +472,7 @@
   let modelList=[];let busy=false;let controller=null;let attachments=[];let notes=ls(K.notes,[]);let editingNote=null;
   let history=[];try{history=ls(K.chat,[])}catch(e){history=[]}
   let recents=ls(K.recents,[]);let artifacts=ls(K.artifacts,[]);
+  let connectors=ls(K.connectors,{});if(!connectors||typeof connectors!=="object")connectors={};
 
   /* ---------- network with fallback ---------- */
   let workingUrl="";
@@ -533,7 +562,17 @@
       PLUGS.map(p=>p[0]).join(", ")+
       ". You do not have direct access to any plug unless the user provides credentials, files, or a connected tool.";
   }
-  function sysPrompt(){return (MODES[modeName]||MODES.General)+plugContext()}
+  function connectorContext(){
+    const names=PLUGS.filter(p=>connectors[p[0]]).map(p=>p[0]);
+    if(!names.length)return "";
+    return " Connectors with locally saved credentials: "+names.join(", ")+
+      ". Treat them as configured, but still require a connected tool before direct use. Never reveal credential values.";
+  }
+  function thinkingContext(){
+    if(!caps.thinking)return "";
+    return " When asked to build, create, zip, deploy, or write a project, first show a short visible plan labeled 'Thinking': goal, stack/tool choices, files, and steps. Then provide the finished result. If credentials are missing, say exactly what is needed.";
+  }
+  function sysPrompt(){return (MODES[modeName]||MODES.General)+plugContext()+connectorContext()+thinkingContext()}
 
   async function loadModels(show){
     const sel=$("modelSel");
@@ -602,7 +641,13 @@
     $("chips").style.display="none";
     history.forEach((m,i)=>{
       const d=document.createElement("div");d.className="msg "+m.role;
-      d.innerHTML='<div class="who">'+(m.role==="user"?"You":esc(prof.name)+" · MJA")+'</div>'+render(m.content);
+      d.innerHTML='<div class="who">'+(m.role==="user"?"You":esc(prof.name)+" · MJA")+'</div>';
+      if(m.role==="assistant"&&caps.thinking&&m.reasoning){
+        const th=document.createElement("div");th.className="thinking";
+        th.innerHTML='<details open><summary>💭 Thinking</summary><div>'+render(m.reasoning)+'</div></details>';
+        d.appendChild(th);
+      }
+      d.insertAdjacentHTML("beforeend",render(m.content));
       if(m.role==="assistant"&&caps.artifacts&&m.content){
         const t=document.createElement("div");t.className="msgtools";
         t.innerHTML='<button class="minibtn artbtn" data-i="'+i+'" data-title="Chat answer '+i+'">💾 Artifact</button>';
@@ -628,7 +673,7 @@
     }
     if(!text)return;
     $("chatInput").value="";attachments=[];drawAttach();
-    history.push({role:"user",content:text});history.push({role:"assistant",content:""});
+    history.push({role:"user",content:text});history.push({role:"assistant",content:"",reasoning:""});
     busy=true;drawChat();$("sendBtn").disabled=true;$("stopBtn").style.display="";
     controller=new AbortController();
     try{
@@ -644,7 +689,10 @@
           if(!line.startsWith("data:"))continue;
           const data=line.slice(5).trim();if(data==="[DONE]")continue;
           try{const o=JSON.parse(data);const dl=o.choices&&o.choices[0]&&o.choices[0].delta;
-            if(dl&&dl.content){history[history.length-1].content+=dl.content;drawChat()}}catch(_){}
+            if(dl){const msg=history[history.length-1];let changed=false;
+              if(dl.reasoning_content){msg.reasoning=(msg.reasoning||"")+dl.reasoning_content;changed=true}
+              if(dl.content){msg.content+=dl.content;changed=true}
+              if(changed)drawChat()}}catch(_){}
         }
       }
       if(!caps.streaming&&history[history.length-1].content==="")history[history.length-1].content="(no content)";
@@ -815,6 +863,32 @@
       box.appendChild(d);
     });
   }
+  function drawConnectorSettings(){
+    const box=$("connectorSettingList");if(!box)return;
+    box.innerHTML="";
+    PLUGS.forEach(p=>{
+      const name=p[0],saved=!!connectors[name];
+      const d=document.createElement("div");d.className="listitem";
+      d.innerHTML="<b>"+esc(name)+"</b><span>"+esc(p[1])+" · "+(saved?"Credential saved locally":"No credential saved")+"</span>"+
+        "<div class='flex' style='margin-top:8px'>"+
+        "<input type='password' placeholder='API key / token' data-conn='"+esc(name)+"' style='flex:1;min-width:150px'>"+
+        "<button class='btn sm' data-save-conn='"+esc(name)+"'>Save</button>"+
+        (saved?"<button class='btn ghost sm' data-clear-conn='"+esc(name)+"'>Clear</button>":"")+"</div>";
+      box.appendChild(d);
+    });
+    box.querySelectorAll("[data-save-conn]").forEach(b=>b.onclick=()=>{
+      const name=b.dataset.saveConn;
+      const input=Array.from(box.querySelectorAll("[data-conn]")).find(x=>x.dataset.conn===name);
+      const v=input?input.value.trim():"";
+      if(v){connectors[name]=v;toast(name+" credential saved")}
+      else{delete connectors[name];toast(name+" credential cleared")}
+      save(K.connectors,connectors);drawConnectorSettings();drawStats();
+    });
+    box.querySelectorAll("[data-clear-conn]").forEach(b=>b.onclick=()=>{
+      delete connectors[b.dataset.clearConn];save(K.connectors,connectors);
+      toast(b.dataset.clearConn+" credential cleared");drawConnectorSettings();drawStats();
+    });
+  }
   function applyToggles(){
     $("attachBtn").style.display=tools.attach?"":"none";
     $("voiceBtn").style.display=tools.voice?"":"none";
@@ -849,7 +923,8 @@
       '<span class="pill">📦 '+artifacts.length+' artifacts</span>'+
       '<span class="pill">📝 '+notes.length+' notes</span>'+
       '<span class="pill">🤖 '+modelList.length+' models</span>'+
-      '<span class="pill">🔌 '+PLUGS.length+' plugs</span>';
+      '<span class="pill">🔌 '+PLUGS.length+' plugs</span>'+
+      '<span class="pill">🔐 '+Object.keys(connectors).length+' keys</span>';
   }
   $("profSave").onclick=()=>{prof={name:$("profName").value.trim()||"You",tag:$("profTag").value.trim()};
     save(K.profile,prof);drawProfile();drawChat();toast("Profile saved")};
@@ -860,6 +935,7 @@
     workingUrl="";toast("Settings saved");loadModels(true);check()};
   $("setTest").onclick=()=>loadModels(true);
   $("connTest").onclick=()=>{workingUrl="";loadModels(true)};
+  $("openConnectorSettings").onclick=()=>switchView("connectorsettings");
   document.querySelectorAll("[data-url]").forEach(b=>b.onclick=()=>{save(K.url,b.dataset.url);workingUrl="";
     $("setUrl").value=b.dataset.url;loadModels(true)});
   $("darkToggle").onchange=e=>{applyTheme(e.target.checked?"dark":"light")};
@@ -879,6 +955,7 @@
     if(v==="recents")drawRecents();if(v==="artifacts")drawArtifacts();
     if(v==="notes")drawNotes($("noteSearch").value);if(v==="profile")drawProfile();
     if(v==="tools"||v==="caps")drawToggles();if(v==="aimode")drawModes();
+    if(v==="connectorsettings")drawConnectorSettings();
     if(v==="theme")applyTheme(ls(K.theme,"dark"));
     window.scrollTo(0,0);
   }
@@ -887,7 +964,7 @@
   /* ---------- init ---------- */
   applyTheme(ls(K.theme,"dark"));
   $("modeLabel").textContent=modeName+" mode";
-  applyToggles();drawToggles();drawModes();drawProfile();drawRecents();drawArtifacts();drawNotes();drawChat();drawAttach();
+  applyToggles();drawToggles();drawModes();drawProfile();drawRecents();drawArtifacts();drawNotes();drawChat();drawAttach();drawConnectorSettings();
   loadModels();setInterval(check,15000);
 })();
 </script>
