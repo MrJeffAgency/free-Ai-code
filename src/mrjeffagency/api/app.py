@@ -58,15 +58,12 @@ def create_app(services: ApiServices) -> FastAPI:
     # Admin routes keep their own strict loopback/Origin checks.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["null", "capacitor://localhost", "file://"],
-        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+        # WebViews can report several origins (file://, capacitor://, http://)
+        # and some Android builds send none. Allow any local caller; the API
+        # itself is loopback-only and Proxy Auth can still require a token.
+        allow_origins=["*"],
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=[
-            "Content-Type",
-            "Authorization",
-            "Anthropic-Version",
-            "X-Requested-With",
-        ],
+        allow_headers=["*"],
         allow_credentials=False,
     )
     app.add_middleware(AdminNoStoreMiddleware)
