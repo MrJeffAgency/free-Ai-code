@@ -175,7 +175,7 @@
     <!-- CHAT -->
     <section class="view active" id="view-chat">
       <div class="bar">
-        <select id="modelSel"><option>(server default)</option></select>
+        <select id="modelSel"><option>(recommended model)</option></select>
         <button class="btn ghost sm" id="newChat">New</button>
         <button class="btn ghost sm" id="refreshModels">↻</button>
         <button class="btn sm" id="stopBtn" style="display:none">Stop</button>
@@ -337,11 +337,11 @@
         <h3 style="margin:0">⚙ Settings</h3>
         <div class="card">
           <div class="field"><label>Server URL</label><input type="text" id="setUrl" /></div>
-          <div class="field"><label>Model (blank = server default)</label><input type="text" id="setModel" /></div>
+          <div class="field"><label>Model (blank = recommended Nemotron)</label><input type="text" id="setModel" /></div>
           <div class="field"><label>Bearer token (if Proxy Auth is on)</label><input type="text" id="setToken" /></div>
           <div class="flex"><button class="btn" id="setSave">Save settings</button>
             <button class="btn ghost" id="setTest">Test connection</button></div>
-          <p class="hint">MJA must be running on this device. Default: http://127.0.0.1:8083</p>
+          <p class="hint">MJA must be running on this device. Default: http://127.0.0.1:8083 · Blank model uses the verified Nemotron fallback.</p>
         </div>
         <div class="card"><h3 style="margin:0 0 6px">Connection help</h3>
           <p class="hint" style="margin:0">If you see “Failed to fetch”: start <b>mja-server</b> in Acode terminal, keep MJA on port 8083, and enable “Install unknown apps” + local network for this app. Try both 127.0.0.1 and localhost above.</p>
@@ -383,6 +383,8 @@
   const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
   const url=()=>ls(K.url,"")||"http://127.0.0.1:8083";
   const model=()=>ls(K.model,"")||"";
+  const DEFAULT_MODEL="anthropic/nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b";
+  const chosenModel=()=>model()||DEFAULT_MODEL;
   const token=()=>ls(K.token,"")||"";
   const esc=s=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
   const toast=t=>{const e=$("toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),2200)};
@@ -424,42 +426,84 @@
 
   /* ---------- network with fallback ---------- */
   let workingUrl="";
-  function showError(msg){
+  function showError(msg,title){
     const b=$("errorBanner");
-    b.innerHTML="<b>⚠ Can't reach MJA server</b><br>"+esc(msg)+
+    b.innerHTML="<b>⚠ "+esc(title||"MJA error")+"</b><br>"+esc(msg)+
       "<br><button class='btn ghost sm' id='bannerRetry'>Retry now</button>";
     b.classList.add("show");
     $("bannerRetry").onclick=()=>loadModels(true);
   }
   function clearError(){$("errorBanner").classList.remove("show");$("errorBanner").innerHTML=""}
+  async function errorDetail(r){
+    try{
+      const text=(await r.text()).trim();
+      if(!text)return "";
+      try{
+        const j=JSON.parse(text);
+        return String((j.error&&j.error.message)||j.message||j.detail||text).slice(0,400);
+      }catch(_){return text.slice(0,400)}
+    }catch(_){return ""}
+  }
+  function clientErrorStatus(status){
+    return status>=400&&status<500&&status!==408&&status!==429;
+  }
+  function fatalError(failure){
+    const e=new Error(failure);e.fatal=true;return e;
+  }
+  function networkError(errs,sawHTTP){
+    return new Error(errs.join(" | ")+(sawHTTP?" — MJA returned an error.":" — make sure mja-server is running on port 8083."));
+  }
+  function requestList(){
+    return workingUrl?[workingUrl].concat(candidates().filter(u=>u!==workingUrl)):candidates();
+  }
   async function fetchJSON(path,opts,timeout){
     opts=opts||{};timeout=timeout||9000;
-    const errs=[];
-    const list=workingUrl?[workingUrl].concat(candidates().filter(u=>u!==workingUrl)):candidates();
-    for(const base of list){
+    const errs=[];let sawHTTP=false;
+    for(const base of requestList()){
       const ac=new AbortController();const timer=setTimeout(()=>ac.abort(),timeout);
       try{
         const r=await fetch(base+path,{...opts,signal:ac.signal});
-        clearTimeout(timer);
-        if(!r.ok){errs.push(base+" → HTTP "+r.status);continue}
+        clearTimeout(timer);sawHTTP=true;
+        if(!r.ok){
+          const detail=await errorDetail(r);
+          const failure=base+" → HTTP "+r.status+(detail?" · "+detail:"");
+          errs.push(failure);
+          if(clientErrorStatus(r.status)){setDot(true);throw fatalError(failure)}
+          continue;
+        }
         workingUrl=base;setDot(true);clearError();
         return r;
-      }catch(e){clearTimeout(timer);errs.push(base+" → "+((e&&e.message)||"blocked"))}
+      }catch(e){
+        clearTimeout(timer);
+        if(e&&e.fatal)throw e;
+        if(e&&e.name==="AbortError"&&opts.signal&&opts.signal.aborted)throw e;
+        errs.push(base+" → "+((e&&e.message)||"blocked"));
+      }
     }
-    setDot(false);throw new Error(errs.join(" | ")+" — make sure mja-server is running on port 8083.");
+    setDot(false);throw networkError(errs,sawHTTP);
   }
   async function streamChat(payload,signal){
-    const errs=[];
-    const list=workingUrl?[workingUrl].concat(candidates().filter(u=>u!==workingUrl)):candidates();
-    for(const base of list){
+    const errs=[];let sawHTTP=false;
+    for(const base of requestList()){
       try{
         const r=await fetch(base+"/v1/chat/completions",{method:"POST",headers:headers(),
           body:JSON.stringify(payload),signal:signal});
-        if(!r.ok){errs.push(base+" → HTTP "+r.status);continue}
+        sawHTTP=true;
+        if(!r.ok){
+          const detail=await errorDetail(r);
+          const failure=base+" → HTTP "+r.status+(detail?" · "+detail:"");
+          errs.push(failure);
+          if(clientErrorStatus(r.status)){setDot(true);throw fatalError(failure)}
+          continue;
+        }
         workingUrl=base;setDot(true);clearError();return r;
-      }catch(e){if(e&&e.name==="AbortError")throw e;errs.push(base+" → "+((e&&e.message)||"blocked"))}
+      }catch(e){
+        if(e&&e.fatal)throw e;
+        if(e&&e.name==="AbortError")throw e;
+        errs.push(base+" → "+((e&&e.message)||"blocked"));
+      }
     }
-    setDot(false);throw new Error(errs.join(" | ")+" — make sure mja-server is running on port 8083.");
+    setDot(false);throw networkError(errs,sawHTTP);
   }
   function setDot(on){$("dot").classList.toggle("on",!!on);$("connDot").classList.toggle("on",!!on)}
   function sysPrompt(){return MODES[modeName]||MODES.General}
@@ -469,10 +513,10 @@
     try{
       const r=await fetchJSON("/v1/models",{headers:headers()},9000);
       const d=await r.json();modelList=(d.data||[]).map(m=>m.id).filter(Boolean);
-      sel.innerHTML="";sel.appendChild(new Option("(server default)",""));
+      sel.innerHTML="";sel.appendChild(new Option("(recommended model)",""));
       modelList.forEach(m=>sel.appendChild(new Option(m,m)));sel.value=model();
       $("connStatus").textContent="Connected · "+modelList.length+" models available";
-      $("connDetail").textContent="Working server: "+(workingUrl||url());
+      $("connDetail").textContent="Working server: "+(workingUrl||url())+" · Model: "+chosenModel();
       renderProviders(d.data||[]);
       if(show)toast("Connected · "+modelList.length+" models");
     }catch(e){
@@ -561,7 +605,7 @@
     busy=true;drawChat();$("sendBtn").disabled=true;$("stopBtn").style.display="";
     controller=new AbortController();
     try{
-      const payload={model:model()||undefined,messages:[{role:"system",content:sysPrompt()}]
+      const payload={model:chosenModel(),messages:[{role:"system",content:sysPrompt()}]
         .concat(history.filter(m=>m.content)),stream:true};
       const r=await streamChat(payload,controller.signal);
       const reader=r.body.getReader(),dec=new TextDecoder();let buf="";
@@ -642,7 +686,7 @@
     const out=$("codeResult");out.textContent="Thinking…";
     try{
       const r=await fetchJSON("/v1/chat/completions",{method:"POST",headers:headers(),
-        body:JSON.stringify({model:model()||undefined,messages:[
+        body:JSON.stringify({model:chosenModel(),messages:[
           {role:"system",content:sysPrompt()},
           {role:"user",content:b.dataset.act+"\n\n```\n"+src+"\n```"}]})},120000);
       const d=await r.json();const txt=d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content;
