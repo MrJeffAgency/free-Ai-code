@@ -8,6 +8,8 @@ Android app asks for tool definitions, executes the tool-call loop, and calls
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import re
@@ -39,7 +41,33 @@ _CALLBACK_BASE = os.getenv("MJA_CONNECTOR_CALLBACK_BASE", "http://127.0.0.1:8083
 _CALLBACK_URL = f"{_CALLBACK_BASE}/v1/connectors/oauth/callback"
 _POLLINATIONS_BASE = "https://gen.pollinations.ai"
 _POLLINATIONS_IMAGE_BASE = "https://image.pollinations.ai"
-_SAFE_MEDIA_NAME = re.compile(r"^[A-Za-z0-9_-]+\.mp4$")
+_DUCKAI_BASE = "https://duck.ai"
+_DUCKAI_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/145.0.0.0 Safari/537.36"
+)
+_DUCKAI_MODEL = "gpt-5.6-luna"
+_DUCKAI_SOLVER = (
+    Path(__file__).resolve().parents[1] / "duckai" / "duck_challenge_solver.bundle.js"
+)
+_DUCKAI_STACKS = (
+    (
+        "duckai-web",
+        "Error\nat l (https://duck.ai/dist/duckai-dist/entry.duckai.js:2:2129171)\n"
+        "at async https://duck.ai/dist/duckai-dist/entry.duckai.js:2:1859809",
+    ),
+    ("mja-bridge", "Error\n    at powSolver (vqd/pow.go)"),
+)
+_SAFE_MEDIA_NAME = re.compile(
+    r"^[A-Za-z0-9_-]+\.(?:mp4|jpg|jpeg|png|webp)$"
+)
+_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 CREDENTIAL_KEYS: dict[str, tuple[str, ...]] = {
     "google_drive": (
@@ -51,6 +79,7 @@ CREDENTIAL_KEYS: dict[str, tuple[str, ...]] = {
     "shopify": ("shop", "access_token"),
     "whatsapp": ("phone_number_id", "access_token"),
     "pollinations": ("api_key",),
+    "duckai": (),
 }
 
 REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
@@ -59,6 +88,7 @@ REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "shopify": ("shop", "access_token"),
     "whatsapp": ("phone_number_id", "access_token"),
     "pollinations": ("api_key",),
+    "duckai": (),
 }
 
 CONNECTOR_NAMES = {
@@ -67,6 +97,7 @@ CONNECTOR_NAMES = {
     "shopify": "Shopify",
     "whatsapp": "WhatsApp by Agent Messenger",
     "pollinations": "Pollinations AI",
+    "duckai": "Duck.ai",
     "opencode": "OpenCode Free",
 }
 
@@ -196,6 +227,46 @@ TOOLS: list[dict[str, Any]] = [
                     "message": {"type": "string"},
                 },
                 "required": ["to", "message"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "duckai_web_search",
+            "description": (
+                "Search the live web with Duck.ai. No API key is needed. Returns a "
+                "short answer with any sources Duck.ai provides."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for."},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "duckai_generate_image",
+            "description": (
+                "Create an image from a text prompt with Duck.ai. No API key is "
+                "needed. Returns a local image URL that chat can display and download."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Detailed image description."},
+                    "fallback": {
+                        "type": "boolean",
+                        "description": "Use the clearly labeled no-key image fallback if Duck.ai is unavailable.",
+                    },
+                },
+                "required": ["prompt"],
                 "additionalProperties": False,
             },
         },
@@ -383,6 +454,336 @@ def _save_media(data: bytes, suffix: str) -> Path:
 
 def _media_url(path: Path) -> str:
     return f"{_CALLBACK_BASE}/v1/connectors/media/{path.name}"
+
+
+def _duckai_b64(data: bytes | str) -> str:
+    raw = data.encode("utf-8") if isinstance(data, str) else data
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _duckai_b64_json(value: Any) -> str:
+    return _duckai_b64(json.dumps(value, separators=(",", ":")).encode("utf-8"))
+
+
+def _duckai_sha256_b64(value: str) -> str:
+    return _duckai_b64(hashlib.sha256(value.encode("utf-8")).digest())
+
+
+async def _node_json(args: list[str], *, timeout: float) -> dict[str, Any]:
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.communicate()
+        raise RuntimeError("Duck.ai challenge solver timed out") from None
+    if process.returncode != 0:
+        detail = stderr.decode("utf-8", "replace")[-300:].replace("\n", " ")
+        raise RuntimeError(f"Duck.ai challenge solver failed: {detail}")
+    try:
+        result = json.loads(stdout.decode("utf-8", "replace"))
+    except ValueError:
+        raise RuntimeError("Duck.ai challenge solver returned invalid JSON") from None
+    if not isinstance(result, dict):
+        raise RuntimeError("Duck.ai challenge solver returned an unexpected result")
+    return result
+
+
+async def _duckai_frontend_version(client: httpx.AsyncClient) -> str:
+    response = await client.get(f"{_DUCKAI_BASE}/")
+    if response.status_code >= 400:
+        raise RuntimeError(f"Duck.ai homepage HTTP {response.status_code}")
+    tag = re.search(r'data-version-tag="([^"]*)"', response.text)
+    sha = re.search(r'data-version-sha="([^"]*)"', response.text)
+    if not tag or not sha:
+        raise RuntimeError("Could not read the Duck.ai frontend version")
+    return f"{tag.group(1)}-{sha.group(1)}"
+
+
+async def _duckai_proof(client: httpx.AsyncClient, fe_version: str, stack: str) -> str:
+    response = await client.get(
+        f"{_DUCKAI_BASE}/duckchat/v1/status",
+        headers={
+            "x-vqd-accept": "1",
+            "Cache-Control": "no-store",
+            "x-fe-version": fe_version,
+            "Origin": _DUCKAI_BASE,
+            "Referer": f"{_DUCKAI_BASE}/",
+        },
+    )
+    raw = response.headers.get("x-vqd-hash-1", "")
+    if response.status_code >= 400 or not raw:
+        raise RuntimeError(f"Duck.ai challenge HTTP {response.status_code}")
+    source = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8", "replace")
+    challenge_path = config_dir_path() / f"duckai-challenge-{uuid.uuid4().hex}.js"
+    challenge_path.parent.mkdir(parents=True, exist_ok=True)
+    challenge_path.write_text(source, encoding="utf-8")
+    try:
+        solved = await _node_json(
+            ["node", str(_DUCKAI_SOLVER), str(challenge_path), _DUCKAI_USER_AGENT],
+            timeout=45,
+        )
+    finally:
+        challenge_path.unlink(missing_ok=True)
+    error = solved.get("__error")
+    if error:
+        raise RuntimeError(f"Duck.ai challenge rejected: {str(error)[:200]}")
+    client_hashes = solved.get("client_hashes")
+    if not isinstance(client_hashes, list) or not client_hashes:
+        raise RuntimeError("Duck.ai challenge solver did not return client hashes")
+    proof = dict(solved)
+    proof["client_hashes"] = [_duckai_sha256_b64(str(value)) for value in client_hashes]
+    meta = dict(solved.get("meta") or {})
+    meta.update({"origin": _DUCKAI_BASE, "stack": stack, "duration": "90"})
+    proof["meta"] = meta
+    return _duckai_b64_json(proof)
+
+
+async def _duckai_public_key() -> dict[str, Any]:
+    script = (
+        "const c=require('crypto');"
+        "const {publicKey}=c.generateKeyPairSync('rsa',{modulusLength:2048});"
+        "process.stdout.write(JSON.stringify(publicKey.export({format:'jwk'})));"
+    )
+    key = await _node_json(["node", "-e", script], timeout=30)
+    return {
+        "alg": "RSA-OAEP-256",
+        "e": str(key.get("e", "")),
+        "ext": True,
+        "key_ops": ["encrypt"],
+        "kty": "RSA",
+        "n": str(key.get("n", "")),
+        "use": "enc",
+    }
+
+
+async def _duckai_chat_attempt(
+    client: httpx.AsyncClient,
+    fe_version: str,
+    prompt: str,
+    *,
+    image_mode: bool,
+    stack: str,
+) -> dict[str, Any]:
+    proof = await _duckai_proof(client, fe_version, stack)
+    public_key = await _duckai_public_key()
+    conversation_id = str(uuid.uuid4())
+    message_id = str(uuid.uuid4())
+    if image_mode:
+        content = (
+            "请直接调用图像生成工具，根据以下描述生成一张图片，不要反问、不要解释过程。"
+            f"图像描述：{prompt}"
+        )
+    else:
+        content = (
+            "Search the live web and answer concisely. Include source links when available."
+            f"\n\nQuery: {prompt}"
+        )
+    body: dict[str, Any] = {
+        "model": _DUCKAI_MODEL,
+        "messages": [{"role": "user", "content": content}],
+        "canUseTools": True,
+        "reasoningEffort": "none",
+        "canUseApproxLocation": None,
+        "canShowGreeting": False,
+        "metadata": {
+            "toolChoice": {
+                "GenerateImage" if image_mode else "WebSearch": True,
+            }
+        },
+        "durableStream": {
+            "messageId": message_id,
+            "conversationId": conversation_id,
+            "publicKey": public_key,
+        },
+    }
+    if image_mode:
+        body["canDelegateImageGeneration"] = True
+    response = await client.post(
+        f"{_DUCKAI_BASE}/duckchat/v1/chat",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Origin": _DUCKAI_BASE,
+            "Referer": f"{_DUCKAI_BASE}/",
+            "x-fe-version": fe_version,
+            "x-fe-signals": _duckai_b64(b"{}"),
+            "X-Vqd-Hash-1": proof,
+            "x-ddg-journey-id": conversation_id,
+        },
+        json=body,
+    )
+    if response.status_code != 200:
+        detail = response.text[:300].replace("\n", " ")
+        raise RuntimeError(f"Duck.ai chat HTTP {response.status_code}: {detail}")
+    answer_parts: list[str] = []
+    image_b64 = ""
+    title = ""
+    async for line in response.aiter_lines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data in {"[DONE]", "[PING]"}:
+            continue
+        try:
+            event = json.loads(data)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("action") == "error":
+            raise RuntimeError(
+                f"Duck.ai stream error {event.get('type', '')}: {event.get('message', '')}"
+            )
+        if event.get("type") == "image-title" and event.get("title"):
+            title = str(event["title"])
+        if event.get("role") == "assistant" and event.get("message"):
+            answer_parts.append(str(event["message"]))
+        payload = event.get("data")
+        if isinstance(payload, dict):
+            if payload.get("status") == "success" and payload.get("b64Image"):
+                image_b64 = str(payload["b64Image"])
+            if not title and payload.get("title"):
+                title = str(payload["title"])
+    return {
+        "answer": "".join(answer_parts).strip(),
+        "image_b64": image_b64,
+        "title": title,
+    }
+
+
+async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
+    if not _DUCKAI_SOLVER.is_file():
+        raise RuntimeError("Duck.ai challenge solver is not installed on this server")
+    async with httpx.AsyncClient(
+        timeout=180,
+        headers={
+            "User-Agent": _DUCKAI_USER_AGENT,
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    ) as client:
+        fe_version = await _duckai_frontend_version(client)
+        total = 4 if image_mode else 3
+        last_error = "unknown Duck.ai error"
+        for attempt in range(total):
+            stack = _DUCKAI_STACKS[attempt % len(_DUCKAI_STACKS)][1]
+            try:
+                result = await _duckai_chat_attempt(
+                    client, fe_version, prompt, image_mode=image_mode, stack=stack
+                )
+                if image_mode and result["image_b64"]:
+                    return result | {"attempts": attempt + 1}
+                if not image_mode and result["answer"]:
+                    return result | {"attempts": attempt + 1}
+                last_error = "Duck.ai returned no usable result"
+            except Exception as exc:  # noqa: BLE001 - challenge variants rotate often
+                last_error = f"{type(exc).__name__}: {exc}"
+            if attempt < total - 1:
+                await asyncio.sleep(2 + attempt * 2)
+    raise RuntimeError(f"{last_error} (after {total} attempts)")
+
+
+async def _duckai_image_bytes(prompt: str) -> tuple[bytes, str, str, int]:
+    result = await _duckai_chat(prompt, image_mode=True)
+    raw = base64.b64decode(
+        result["image_b64"] + "=" * (-len(result["image_b64"]) % 4)
+    )
+    if raw.startswith(b"\xff\xd8\xff"):
+        suffix = ".jpg"
+    elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        suffix = ".png"
+    elif raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        suffix = ".webp"
+    else:
+        raise RuntimeError("Duck.ai returned an unrecognized image format")
+    title = result.get("title") or "Duck.ai image"
+    return raw, suffix, str(title), int(result.get("attempts", 0))
+
+
+async def _duckai_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    if tool == "duckai_web_search":
+        query = str(args.get("query", "")).strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="query is required")
+        try:
+            result = await _duckai_chat(query, image_mode=False)
+            return {
+                "ok": True,
+                "provider": "duck.ai",
+                "query": query,
+                "answer": result["answer"],
+                "attempts": result.get("attempts", 0),
+            }
+        except Exception as exc:  # noqa: BLE001 - fall back to the public key-less API
+            reason = f"{type(exc).__name__}: {exc}"
+            data = await _http(
+                "GET",
+                "https://api.duckduckgo.com/",
+                params={
+                    "q": query,
+                    "format": "json",
+                    "no_html": 1,
+                    "skip_disambig": 1,
+                },
+            )
+            answer = str(
+                data.get("AbstractText")
+                or data.get("Answer")
+                or "No instant answer was found."
+            )
+            return {
+                "ok": True,
+                "provider": "duckduckgo-instant-answer (fallback)",
+                "query": query,
+                "answer": answer,
+                "search_url": f"https://duckduckgo.com/?q={quote(query, safe='')}",
+                "fallback_reason": reason[:300],
+            }
+
+    prompt = str(args.get("prompt", "")).strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    try:
+        data, suffix, title, attempts = await _duckai_image_bytes(prompt)
+        path = _save_media(data, suffix)
+        return {
+            "ok": True,
+            "media": {
+                "type": "image",
+                "url": _media_url(path),
+                "title": title,
+            },
+            "provider": "duck.ai",
+            "model": _DUCKAI_MODEL,
+            "prompt": prompt,
+            "attempts": attempts,
+        }
+    except Exception as exc:  # noqa: BLE001 - keep image creation useful if Duck changes
+        reason = f"{type(exc).__name__}: {exc}"
+        if not bool(args.get("fallback", True)):
+            raise HTTPException(status_code=502, detail=f"Duck.ai image failed: {reason}") from exc
+        fallback_bytes, content_type, _ = await _pollinations_image_bytes(prompt)
+        suffix = {
+            "image/png": ".png",
+            "image/webp": ".webp",
+        }.get(content_type, ".jpg")
+        path = _save_media(fallback_bytes, suffix)
+        return {
+            "ok": True,
+            "media": {
+                "type": "image",
+                "url": _media_url(path),
+                "title": "AI image (fallback provider)",
+            },
+            "provider": "pollinations (fallback)",
+            "prompt": prompt,
+            "fallback_reason": reason[:300],
+        }
 
 
 async def _slideshow_video(prompt: str, duration: int) -> dict[str, Any]:
@@ -730,14 +1131,20 @@ async def chatgpt_auth_disconnect(
 
 
 @router.get("/media/{name}")
-async def get_media(name: str) -> FileResponse:
+async def get_media(name: str, download: bool = False) -> FileResponse:
     if not _SAFE_MEDIA_NAME.fullmatch(name):
         raise HTTPException(status_code=404, detail="Media not found")
     path = _MEDIA_DIR / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Media not found")
-    media_type = "video/mp4" if name.endswith(".mp4") else "image/jpeg"
-    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+    suffix = path.suffix.lower()
+    media_type = _MEDIA_TYPES.get(suffix, "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=name if download else None,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.delete("/credentials/{name}")
@@ -989,6 +1396,8 @@ async def invoke(
 
     if name == "pollinations":
         return await _pollinations(tool, args)
+    if name == "duckai":
+        return await _duckai_tool(tool, args)
     if name == "google_drive":
         return await _google_drive(tool, args, name)
     if name == "spotify":
