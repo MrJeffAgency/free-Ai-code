@@ -572,6 +572,9 @@ class Settings(BaseModel):
     opper_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPPER_PROXY"
     )
+    byzar_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="BYZAR_PROXY"
+    )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
     )

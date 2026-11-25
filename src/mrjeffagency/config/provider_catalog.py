@@ -97,6 +97,8 @@ ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
 OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
+# Byzar AI Gateway OpenAI-compatible Chat Completions gateway.
+BYZAR_DEFAULT_BASE = "https://agentapi.byzar.cyou/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -777,6 +779,15 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="opper_api_keys",
         default_base_url=OPPER_DEFAULT_BASE,
         proxy_attr="opper_proxy",
+    ),
+    "byzar": ProviderDescriptor(
+        provider_id="byzar",
+        display_name="Byzar AI Gateway",
+        website_url="https://agentapi.byzar.cyou/",
+        logo_filename="byzar.svg",
+        static_credential="adminuse",
+        default_base_url=BYZAR_DEFAULT_BASE,
+        proxy_attr="byzar_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

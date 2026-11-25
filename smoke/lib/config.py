@@ -85,6 +85,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "nebius": "nebius/Qwen/Qwen3-30B-A3B",
     "scaleway": "scaleway/deepseek/deepseek-v4-flash",
     "opper": "opper/claude-sonnet-4-6",
+    "byzar": "byzar/claude-sonnet-4-5",
     "chutes": "chutes/Qwen/Qwen3-32B-TEE",
     "featherless": "featherless/Qwen/Qwen3-32B",
     "sambanova": "sambanova/Meta-Llama-3.3-70B-Instruct",
@@ -309,7 +310,7 @@ class SmokeConfig:
         self, provider: str, mapped_providers: set[str]
     ) -> bool:
         descriptor = PROVIDER_CATALOG[provider]
-        if not descriptor.local:
+        if not descriptor.local and descriptor.static_credential is None:
             return True
         if provider in mapped_providers:
             return True

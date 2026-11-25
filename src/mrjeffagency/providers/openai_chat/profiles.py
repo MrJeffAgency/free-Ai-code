@@ -819,6 +819,15 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(path="/models"),
     ),
+    "byzar": OpenAIChatProfile(
+        _policy(
+            "BYZAR",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NO_REASONING,
+        model_listing=OpenAIModelListing(path="/models"),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",

@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from mrjeffagency.config.provider_catalog import (
+    BYZAR_DEFAULT_BASE,
     PROVIDER_CATALOG,
     ProviderAuthKind,
     ProviderDescriptor,
@@ -88,6 +89,19 @@ def test_openai_api_is_a_separate_key_configured_provider() -> None:
     assert api.default_base_url == "https://api.openai.com/v1"
     assert subscription.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT
     assert subscription.credential_env is None
+
+
+def test_byzar_uses_public_gateway_key_without_user_configuration() -> None:
+    descriptor = PROVIDER_CATALOG["byzar"]
+
+    assert descriptor.display_name == "Byzar AI Gateway"
+    assert descriptor.website_url == "https://agentapi.byzar.cyou/"
+    assert descriptor.default_base_url == BYZAR_DEFAULT_BASE
+    assert descriptor.static_credential == "adminuse"
+    assert descriptor.credential_env is None
+    assert descriptor.credential_attr is None
+    assert descriptor.configuration_attrs() == ()
+    assert descriptor.proxy_attr == "byzar_proxy"
 
 
 def test_copilot_is_connected_without_credential_configuration() -> None:

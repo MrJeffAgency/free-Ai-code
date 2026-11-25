@@ -15,6 +15,7 @@ from mrjeffagency.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
     ATLASCLOUD_DEFAULT_BASE,
     BEDROCK_DEFAULT_BASE,
+    BYZAR_DEFAULT_BASE,
     CHEAPERINFERENCE_DEFAULT_BASE,
     CHUTES_DEFAULT_BASE,
     CLINE_DEFAULT_BASE,
@@ -199,6 +200,7 @@ def _make_settings(**overrides):
     mock.nebius_proxy = None
     mock.scw_proxy = None
     mock.opper_proxy = None
+    mock.byzar_proxy = None
     mock.chutes_proxy = None
     mock.featherless_proxy = None
     mock.azure_openai_proxy = None
@@ -707,6 +709,29 @@ async def test_opper_provider_config_uses_key_base_and_proxy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_byzar_provider_config_uses_public_credential_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["byzar"]
+    settings = _make_settings(byzar_proxy="http://proxy.test:8080")
+
+    config = build_provider_config(descriptor, settings)
+    with patch("mrjeffagency.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "byzar",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "Byzar AI Gateway"
+    assert descriptor.static_credential == "adminuse"
+    assert descriptor.credential_attr is None
+    assert descriptor.base_url_attr is None
+    assert config.api_key == "adminuse"
+    assert config.base_url == BYZAR_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
 async def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["chutes"]
     settings = _make_settings(
@@ -1185,6 +1210,7 @@ async def test_create_provider_instantiates_each_builtin():
         "nebius": OpenAIChatProvider,
         "scaleway": OpenAIChatProvider,
         "opper": OpenAIChatProvider,
+        "byzar": OpenAIChatProvider,
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,

@@ -30,7 +30,7 @@
   - Preserved native streaming, tool use, and interleaved thinking for maximum performance.
   - For Claude Code, route [Fable](https://www.anthropic.com/claude/fable), [Opus](https://www.anthropic.com/claude/opus), [Sonnet](https://www.anthropic.com/claude/sonnet), and [Haiku](https://www.anthropic.com/claude/haiku) to supported models.
 - Use any model through any of four APIs: [Anthropic Messages](https://platform.claude.com/docs/en/api/messages) (`/v1/messages`), [OpenAI Chat Completions](https://platform.openai.com/docs/api-reference/chat/create) (`/v1/chat/completions`), [OpenAI Responses](https://platform.openai.com/docs/api-reference/responses/create) (`/v1/responses`), or [Gemini](https://ai.google.dev/api/generate-content) (`generateContent`). See [Use The API Directly](#use-the-api-directly).
-- 61 supported providers, including free, paid, subscription, and local providers.
+- 62 supported providers, including free, paid, subscription, and local providers.
   - 1.3B+ free tokens per month.
   - MJA follows provider TOS and removes integrations if they stop being allowed.
 - Use through the terminal, desktop apps ([Codex App](https://learn.chatgpt.com/docs/app), [Claude Desktop](https://claude.ai/download), and [DeepSeek Desktop](https://github.com/deepseek-ai/deepseek-harness)), IDE extensions ([VS Code](https://code.visualstudio.com/) and [JetBrains](https://www.jetbrains.com/)), [your phone](#use-from-your-phone) ([Discord](https://discord.com/) and [Telegram](https://telegram.org/)), or your browser through native Code sessions.
@@ -270,6 +270,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Atlas Cloud](https://console.atlascloud.ai/api-keys) | `ATLASCLOUD_API_KEY` | `atlascloud/deepseek-ai/deepseek-v4-flash` |
 | [xKiro](https://xkiro.com/) | `XKIRO_API_KEY` | `xkiro/qwen/qwen3.7-flash:free` |
 | [Opper](https://platform.opper.ai/) | `OPPER_API_KEY` | `opper/claude-sonnet-4-6` |
+| [Byzar AI Gateway](https://agentapi.byzar.cyou/) | No key required (public gateway credential) | `byzar/claude-sonnet-4-5` |
 | [Ollama Cloud](https://ollama.com/settings/keys) | `OLLAMA_API_KEY` | `ollama_cloud/qwen3-coder:480b` |
 | [LM Studio](https://lmstudio.ai/) | `LM_STUDIO_BASE_URL` | `lmstudio/<model-id>` |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | `LLAMACPP_BASE_URL` | `llamacpp/<model-id>` |
@@ -289,6 +290,10 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 - OpenAI API uses a separate Platform API key. Enter it under
   **Providers → Cloud providers → OpenAI API → Configure**. The model list may
   include IDs that cannot handle coding requests. Choose a text-generation model.
+- Byzar AI Gateway uses the public credential documented at
+  [agentapi.byzar.cyou](https://agentapi.byzar.cyou/), so no key setup is needed.
+  Select a `byzar/<model-id>` model, such as `byzar/claude-sonnet-4-5`.
+  Set `BYZAR_PROXY` only if your network requires an outbound proxy.
 - GitHub Copilot uses your signed-in GitHub account and subscription. Install
   [Copilot CLI 1.0.83](https://github.com/github/copilot-cli/releases/tag/v1.0.83)
   on PATH, then choose **Providers → OAuth providers → GitHub Copilot → Connect**.

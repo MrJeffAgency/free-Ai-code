@@ -725,6 +725,20 @@ def test_opper_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
+def test_byzar_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+    monkeypatch.delenv("MJA_SMOKE_MODEL_BYZAR", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"byzar"}),
+        settings=_settings(model="ollama/llama3.1", ollama_base_url=""),
+    )
+
+    models = config.provider_smoke_models()
+
+    assert [model.provider for model in models] == ["byzar"]
+    assert models[0].full_model == "byzar/claude-sonnet-4-5"
+    assert models[0].source == "provider_default"
+
+
 def test_featherless_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
     monkeypatch.delenv("MJA_SMOKE_MODEL_FEATHERLESS", raising=False)
     config = _smoke_config(

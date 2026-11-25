@@ -11,6 +11,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `anthropic.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/anthropic.svg |
 | `azure-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/azure-color.svg |
 | `bedrock-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/bedrock-color.svg |
+| `byzar.svg` | https://agentapi.byzar.cyou/ (single-colour Admin UI mark authored for the public gateway) |
 | `cerebras-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cerebras-color.svg |
 | `cheaperinference.svg` | https://www.cheaperinference.com/icon.svg |
 | `chutes.png` | https://chutes.ai/favicon.png |
