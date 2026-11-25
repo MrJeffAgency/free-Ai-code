@@ -53,6 +53,8 @@ _DUCKAI_SOLVER = (
 )
 _DUCKAI_RATE_LIMIT_COOLDOWN = 45.0
 _DUCKAI_RATE_LIMIT_UNTIL = 0.0
+_DUCKAI_NETWORK_COOLDOWN = 20.0
+_DUCKAI_NETWORK_UNTIL = 0.0
 _DUCKAI_STACKS = (
     (
         "duckai-web",
@@ -677,8 +679,19 @@ def _duckai_is_rate_limit(reason: str) -> bool:
     )
 
 
+def _duckai_is_connection_error(reason: str) -> bool:
+    return bool(
+        re.search(
+            r"ConnectError|Errno\s+-3|EAI_AGAIN|Try again|temporary failure|"
+            r"name or service not known|Network is unreachable|ConnectTimeout|ReadTimeout",
+            reason,
+            re.IGNORECASE,
+        )
+    )
+
+
 async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
-    global _DUCKAI_RATE_LIMIT_UNTIL
+    global _DUCKAI_RATE_LIMIT_UNTIL, _DUCKAI_NETWORK_UNTIL
     if not _DUCKAI_SOLVER.is_file():
         raise RuntimeError("Duck.ai challenge solver is not installed on this server")
     wait_for = _DUCKAI_RATE_LIMIT_UNTIL - time.monotonic()
@@ -686,6 +699,11 @@ async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
         logger.warning(f"Duck.ai is cooling down after a rate limit; waiting {wait_for:.1f}s")
         await asyncio.sleep(wait_for)
         _DUCKAI_RATE_LIMIT_UNTIL = 0.0
+    wait_for = _DUCKAI_NETWORK_UNTIL - time.monotonic()
+    if wait_for > 0:
+        logger.warning(f"Duck.ai is cooling down after a network error; waiting {wait_for:.1f}s")
+        await asyncio.sleep(wait_for)
+        _DUCKAI_NETWORK_UNTIL = 0.0
     async with httpx.AsyncClient(
         timeout=180,
         headers={
@@ -693,13 +711,16 @@ async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
             "Accept-Language": "en-US,en;q=0.9",
         },
     ) as client:
-        fe_version = await _duckai_frontend_version(client)
+        fe_version = ""
         total = 4 if image_mode else 3
         last_error = "unknown Duck.ai error"
         rate_limited = False
+        network_error = False
         for attempt in range(total):
             stack = _DUCKAI_STACKS[attempt % len(_DUCKAI_STACKS)][1]
             try:
+                if not fe_version:
+                    fe_version = await _duckai_frontend_version(client)
                 result = await _duckai_chat_attempt(
                     client, fe_version, prompt, image_mode=image_mode, stack=stack
                 )
@@ -717,15 +738,36 @@ async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
                     )
                     rate_limited = True
                     break
+                if _duckai_is_connection_error(last_error):
+                    _DUCKAI_NETWORK_UNTIL = (
+                        time.monotonic() + _DUCKAI_NETWORK_COOLDOWN
+                    )
+                    network_error = True
             if attempt < total - 1:
-                await asyncio.sleep(2 + attempt * 2)
-        if rate_limited:
-            wait_for = max(0.0, _DUCKAI_RATE_LIMIT_UNTIL - time.monotonic())
-            logger.warning(f"Duck.ai rate limit detected; retrying once after {wait_for:.1f}s")
+                if network_error and _duckai_is_connection_error(last_error):
+                    delay = (6, 12, 20, 30)[min(attempt, 3)]
+                else:
+                    delay = 2 + attempt * 2
+                await asyncio.sleep(delay)
+        needs_retry = rate_limited or network_error
+        if needs_retry:
+            if rate_limited:
+                cooldown_until = _DUCKAI_RATE_LIMIT_UNTIL
+                label = "rate limit"
+            else:
+                cooldown_until = _DUCKAI_NETWORK_UNTIL
+                label = "network error"
+            wait_for = max(0.0, cooldown_until - time.monotonic())
+            logger.warning(f"Duck.ai {label} detected; retrying once after {wait_for:.1f}s")
             if wait_for > 0:
                 await asyncio.sleep(wait_for)
-            _DUCKAI_RATE_LIMIT_UNTIL = 0.0
+            if rate_limited:
+                _DUCKAI_RATE_LIMIT_UNTIL = 0.0
+            else:
+                _DUCKAI_NETWORK_UNTIL = 0.0
             try:
+                if not fe_version:
+                    fe_version = await _duckai_frontend_version(client)
                 result = await _duckai_chat_attempt(
                     client,
                     fe_version,
@@ -745,7 +787,11 @@ async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
                     _DUCKAI_RATE_LIMIT_UNTIL = (
                         time.monotonic() + _DUCKAI_RATE_LIMIT_COOLDOWN
                     )
-    suffix = "after cooldown retry" if rate_limited else f"after {total} attempts"
+                elif _duckai_is_connection_error(last_error):
+                    _DUCKAI_NETWORK_UNTIL = (
+                        time.monotonic() + _DUCKAI_NETWORK_COOLDOWN
+                    )
+    suffix = "after cooldown retry" if needs_retry else f"after {total} attempts"
     raise RuntimeError(f"{last_error} ({suffix})")
 
 
@@ -832,7 +878,13 @@ async def _duckai_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             f"Duck.ai image generation failed; fallback requested={use_fallback}: {reason[:500]}"
         )
         if not use_fallback:
-            raise HTTPException(status_code=502, detail=f"Duck.ai image failed: {reason}") from exc
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Duck.ai image failed after retries: {reason}. "
+                    "No fallback provider was used; try again if your connection is unstable."
+                ),
+            ) from exc
         fallback_bytes, content_type, _ = await _pollinations_image_bytes(prompt)
         suffix = {
             "image/png": ".png",
