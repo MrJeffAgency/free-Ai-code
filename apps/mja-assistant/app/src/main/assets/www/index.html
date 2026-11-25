@@ -201,6 +201,7 @@
         <button class="chip">Explain this code</button>
         <button class="chip">Write a message</button>
         <button class="chip">Brainstorm ideas</button>
+        <button class="chip">Use Duck.ai web</button>
       </div>
       <div class="attachbar" id="attachBar"></div>
       <div class="composer">
@@ -314,7 +315,11 @@
         </div>
         <div class="card" id="duckaiCard">
           <div class="row"><div><h3 style="margin:0">🦆 Duck.ai web + images</h3><p id="duckaiStatus">Checking…</p></div><span class="dot" id="duckaiDot"></span></div>
-          <p class="hint" id="duckaiDetail" style="margin:8px 0 0">No key needed. Prompts such as “craet in imger of italy” go from MJA to Duck.ai; generated images are saved on your local server and shown in chat with a download link.</p>
+          <div class="flex" style="margin-top:9px">
+            <button class="btn ghost sm" id="duckaiOpenWeb">Open Duck.ai web</button>
+            <button class="btn sm" id="duckaiSearchWeb">Search with Duck.ai</button>
+          </div>
+          <p class="hint" id="duckaiDetail" style="margin:8px 0 0">No key needed. Prompts such as “craet in imger of italy” go from MJA to Duck.ai; generated images are saved on your local server and shown in chat with a download link. Duck.ai is required by default — no silent Pollinations fallback.</p>
         </div>
         <div class="flex">
           <button class="btn sm" id="pushConnectorKeys">Push keys to server</button>
@@ -630,7 +635,10 @@
     const active=activeConnectorTools();
     if(!caps.live||!active.length)return "";
     return " Live connector tools are available: "+active.map(t=>t.function&&t.function.name).filter(Boolean).join(", ")+
-      ". Use them only when needed and report the result clearly. Image and video tools return playable, downloadable media links; include them in your final answer.";
+      ". Use them only when needed and report the result clearly. Image and video tools return playable, downloadable media links; include them in your final answer."+
+      " For image creation, use duckai_generate_image. Use pollinations_generate_image only when the user explicitly asks for Pollinations; fallback=true on duckai_generate_image is opt-in and must be labeled."+
+      " The phrase 'Duck.ai web' means duckai_web_search or opening https://duck.ai/, never image generation."+
+      " If Duck.ai image generation fails, report the error plainly; do not silently switch providers.";
   }
   function sysPrompt(){return (MODES[modeName]||MODES.General)+plugContext()+connectorContext()+thinkingContext()+liveContext()}
 
@@ -924,6 +932,24 @@
     return Object.keys(calls).sort((a,b)=>Number(a)-Number(b)).map(k=>calls[k])
       .filter(c=>c.function&&c.function.name);
   }
+  function duckaiWebIntent(value){
+    const text=String(value||"").trim().replace(/^(?:hey|ok|please)\s+/i,"");
+    if(!/\bduck\.?ai\b/i.test(text))return null;
+    if(duckaiImagePrompt(text))return null;
+    if(/^(?:use|open|go(?:\s+to)?|launch|take me to|visit)\s+(?:the\s+)?duck\.?ai(?:\s+web)?\s*$/i.test(text)){
+      return {open:true,query:""};
+    }
+    const m=text.match(/^(?:use|using|search|search with|look up with|ask|try)\s+(?:the\s+)?duck\.?ai(?:\s+web)?(?:\s+(?:search|to\s+search))?\s*(?:for|about|on|:)?\s*(.+)$/i);
+    if(m&&m[1]&&m[1].trim())return {open:false,query:m[1].trim()};
+    if(/\b(?:web\s+search|search\s+the\s+web|look\s+up)\b/i.test(text)){
+      const q=text.replace(/^(?:use|using|please)\s+/i,"")
+        .replace(/\b(?:with|using|via|on)\s+(?:the\s+)?duck\.?ai(?:\s+web)?\b/gi,"")
+        .replace(/\b(?:web\s+search|search\s+the\s+web|look\s+up|for|about)\b/gi,"")
+        .replace(/\s+/g," ").trim();
+      if(q)return {open:false,query:q};
+    }
+    return null;
+  }
   function duckaiImagePrompt(value){
     const text=String(value||"").trim();
     if(!text)return "";
@@ -947,12 +973,39 @@
     controller=new AbortController();
     try{
       const assistant=history[history.length-1];
-      const duckPrompt=(connectorStatus.duckai&&connectorStatus.duckai.configured)?duckaiImagePrompt(text):"";
+      const duckReady=!!(connectorStatus.duckai&&connectorStatus.duckai.configured);
       let handledDirect=false;
+      const webIntent=duckReady?duckaiWebIntent(text):null;
+      if(webIntent){
+        try{
+          if(webIntent.open){
+            openExternal("https://duck.ai/");
+            assistant.content="Opened Duck.ai web. To search from MJA, say “Use Duck.ai web search for your question”.";
+            handledDirect=true;drawChat();
+          }else{
+            assistant.content="🔎 Searching the web with Duck.ai…";drawChat();
+            const result=await invokeConnectorTool("duckai_web_search",{query:webIntent.query});
+            if(result&&result.ok){
+              assistant.content=(result.provider==="duck.ai"?"Duck.ai web result:\n\n":"Duck.ai was unavailable; DuckDuckGo instant answer:\n\n")+
+                String(result.answer||"");
+              if(result.search_url)assistant.content+="\n\n"+result.search_url;
+              history.push({role:"tool",tool_call_id:"duckai_web_"+Date.now(),content:JSON.stringify(result)});
+              handledDirect=true;drawChat();
+            }else{
+              assistant.content="Duck.ai web search failed"+(result&&result.detail?": "+result.detail:"")+".";
+              handledDirect=true;drawChat();
+            }
+          }
+        }catch(e){
+          assistant.content="Duck.ai web search failed: "+((e&&e.message)||e);
+          handledDirect=true;drawChat();
+        }
+      }
+      const duckPrompt=!handledDirect&&duckReady?duckaiImagePrompt(text):"";
       if(duckPrompt){
         try{
           assistant.content="🦆 Creating your image with Duck.ai…";drawChat();
-          const result=await invokeConnectorTool("duckai_generate_image",{prompt:duckPrompt});
+          const result=await invokeConnectorTool("duckai_generate_image",{prompt:duckPrompt,fallback:false});
           if(result&&result.ok&&result.media){
             assistant.content=result.provider==="duck.ai"
               ?"Here is your image from Duck.ai. Use Download image below to save it."
@@ -960,14 +1013,17 @@
             history.push({role:"tool",tool_call_id:"duckai_"+Date.now(),
               content:JSON.stringify(result),media:result.media});
             handledDirect=true;drawChat();
+          }else{
+            assistant.content="Duck.ai image failed"+(result&&result.detail?": "+result.detail:"")+". No fallback provider was used.";
+            handledDirect=true;drawChat();
           }
         }catch(e){
-          assistant.content="";
-          toast("Duck.ai image failed: "+((e&&e.message)||e));
+          assistant.content="Duck.ai image failed: "+((e&&e.message)||e)+". No fallback provider was used.";
+          toast("Duck.ai image failed");
+          handledDirect=true;drawChat();
         }
       }
       if(!handledDirect){
-        if(duckPrompt)assistant.content="";
         const activeTools=activeConnectorTools();
         const rounds=caps.live&&activeTools.length?4:1;
         for(let round=0;round<rounds;round++){
@@ -1305,6 +1361,12 @@
   $("chatgptCancel").onclick=chatgptCancel;
   $("chatgptDisconnect").onclick=chatgptDisconnect;
   $("geminiEnable").onclick=enableGemini;
+  $("duckaiOpenWeb").onclick=()=>openExternal("https://duck.ai/");
+  $("duckaiSearchWeb").onclick=()=>{
+    const q=$("chatInput").value.trim();
+    if(!q){toast("Type a search query first");return}
+    send("Use Duck.ai web search for "+q);
+  };
   Array.from(document.querySelectorAll("[data-openkey]")).filter(b=>b.dataset.openkey==="Google AI / Gemini").forEach(b=>b.onclick=()=>openExternal("https://aistudio.google.com/apikey"));
   document.querySelectorAll("[data-url]").forEach(b=>b.onclick=()=>{save(K.url,b.dataset.url);workingUrl="";
     $("setUrl").value=b.dataset.url;loadModels(true)});

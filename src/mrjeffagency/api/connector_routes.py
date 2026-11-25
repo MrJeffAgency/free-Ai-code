@@ -23,6 +23,7 @@ from urllib.parse import quote
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
+from loguru import logger
 
 from mrjeffagency.application.connected_accounts import ConnectedAccountLoginMode
 from mrjeffagency.config.paths import config_dir_path
@@ -50,6 +51,8 @@ _DUCKAI_MODEL = "gpt-5.6-luna"
 _DUCKAI_SOLVER = (
     Path(__file__).resolve().parents[1] / "duckai" / "duck_challenge_solver.bundle.js"
 )
+_DUCKAI_RATE_LIMIT_COOLDOWN = 45.0
+_DUCKAI_RATE_LIMIT_UNTIL = 0.0
 _DUCKAI_STACKS = (
     (
         "duckai-web",
@@ -255,7 +258,10 @@ TOOLS: list[dict[str, Any]] = [
             "name": "duckai_generate_image",
             "description": (
                 "Create an image from a text prompt with Duck.ai. No API key is "
-                "needed. Returns a local image URL that chat can display and download."
+                "needed. Returns a local image URL that chat can display and download. "
+                "Use only for explicit image creation requests. If Duck.ai fails, "
+                "report the error; do not silently switch providers. 'Duck.ai web' "
+                "without an image request means duckai_web_search, not this tool."
             ),
             "parameters": {
                 "type": "object",
@@ -263,7 +269,11 @@ TOOLS: list[dict[str, Any]] = [
                     "prompt": {"type": "string", "description": "Detailed image description."},
                     "fallback": {
                         "type": "boolean",
-                        "description": "Use the clearly labeled no-key image fallback if Duck.ai is unavailable.",
+                        "default": False,
+                        "description": (
+                            "OPT-IN ONLY. Set true to allow a clearly labeled Pollinations "
+                            "fallback if Duck.ai fails. Default false: Duck.ai is required."
+                        ),
                     },
                 },
                 "required": ["prompt"],
@@ -657,9 +667,25 @@ async def _duckai_chat_attempt(
     }
 
 
+def _duckai_is_rate_limit(reason: str) -> bool:
+    return bool(
+        re.search(
+            r"ERR_BN_LIMIT|8e04|HTTP\s+418|HTTP\s+429|too\s+many\s+requests|rate\s+limit",
+            reason,
+            re.IGNORECASE,
+        )
+    )
+
+
 async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
+    global _DUCKAI_RATE_LIMIT_UNTIL
     if not _DUCKAI_SOLVER.is_file():
         raise RuntimeError("Duck.ai challenge solver is not installed on this server")
+    wait_for = _DUCKAI_RATE_LIMIT_UNTIL - time.monotonic()
+    if wait_for > 0:
+        logger.warning(f"Duck.ai is cooling down after a rate limit; waiting {wait_for:.1f}s")
+        await asyncio.sleep(wait_for)
+        _DUCKAI_RATE_LIMIT_UNTIL = 0.0
     async with httpx.AsyncClient(
         timeout=180,
         headers={
@@ -670,6 +696,7 @@ async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
         fe_version = await _duckai_frontend_version(client)
         total = 4 if image_mode else 3
         last_error = "unknown Duck.ai error"
+        rate_limited = False
         for attempt in range(total):
             stack = _DUCKAI_STACKS[attempt % len(_DUCKAI_STACKS)][1]
             try:
@@ -683,9 +710,43 @@ async def _duckai_chat(prompt: str, *, image_mode: bool) -> dict[str, Any]:
                 last_error = "Duck.ai returned no usable result"
             except Exception as exc:  # noqa: BLE001 - challenge variants rotate often
                 last_error = f"{type(exc).__name__}: {exc}"
+                logger.warning(f"Duck.ai attempt {attempt + 1} failed: {last_error[:500]}")
+                if _duckai_is_rate_limit(last_error):
+                    _DUCKAI_RATE_LIMIT_UNTIL = (
+                        time.monotonic() + _DUCKAI_RATE_LIMIT_COOLDOWN
+                    )
+                    rate_limited = True
+                    break
             if attempt < total - 1:
                 await asyncio.sleep(2 + attempt * 2)
-    raise RuntimeError(f"{last_error} (after {total} attempts)")
+        if rate_limited:
+            wait_for = max(0.0, _DUCKAI_RATE_LIMIT_UNTIL - time.monotonic())
+            logger.warning(f"Duck.ai rate limit detected; retrying once after {wait_for:.1f}s")
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
+            _DUCKAI_RATE_LIMIT_UNTIL = 0.0
+            try:
+                result = await _duckai_chat_attempt(
+                    client,
+                    fe_version,
+                    prompt,
+                    image_mode=image_mode,
+                    stack=_DUCKAI_STACKS[0][1],
+                )
+                if image_mode and result["image_b64"]:
+                    return result | {"attempts": total + 1}
+                if not image_mode and result["answer"]:
+                    return result | {"attempts": total + 1}
+                last_error = "Duck.ai returned no usable result after cooldown"
+            except Exception as exc:  # noqa: BLE001 - surface the real Duck.ai error
+                last_error = f"{type(exc).__name__}: {exc}"
+                logger.warning(f"Duck.ai retry after cooldown failed: {last_error[:500]}")
+                if _duckai_is_rate_limit(last_error):
+                    _DUCKAI_RATE_LIMIT_UNTIL = (
+                        time.monotonic() + _DUCKAI_RATE_LIMIT_COOLDOWN
+                    )
+    suffix = "after cooldown retry" if rate_limited else f"after {total} attempts"
+    raise RuntimeError(f"{last_error} ({suffix})")
 
 
 async def _duckai_image_bytes(prompt: str) -> tuple[bytes, str, str, int]:
@@ -721,6 +782,7 @@ async def _duckai_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             }
         except Exception as exc:  # noqa: BLE001 - fall back to the public key-less API
             reason = f"{type(exc).__name__}: {exc}"
+            logger.warning(f"Duck.ai web search failed; using instant-answer fallback: {reason[:500]}")
             data = await _http(
                 "GET",
                 "https://api.duckduckgo.com/",
@@ -748,6 +810,7 @@ async def _duckai_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
     prompt = str(args.get("prompt", "")).strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
+    use_fallback = bool(args.get("fallback", False))
     try:
         data, suffix, title, attempts = await _duckai_image_bytes(prompt)
         path = _save_media(data, suffix)
@@ -763,9 +826,12 @@ async def _duckai_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             "prompt": prompt,
             "attempts": attempts,
         }
-    except Exception as exc:  # noqa: BLE001 - keep image creation useful if Duck changes
+    except Exception as exc:  # noqa: BLE001 - Duck.ai failures must be visible by default
         reason = f"{type(exc).__name__}: {exc}"
-        if not bool(args.get("fallback", True)):
+        logger.warning(
+            f"Duck.ai image generation failed; fallback requested={use_fallback}: {reason[:500]}"
+        )
+        if not use_fallback:
             raise HTTPException(status_code=502, detail=f"Duck.ai image failed: {reason}") from exc
         fallback_bytes, content_type, _ = await _pollinations_image_bytes(prompt)
         suffix = {
