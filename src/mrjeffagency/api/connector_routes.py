@@ -22,12 +22,15 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
+from mrjeffagency.application.connected_accounts import ConnectedAccountLoginMode
 from mrjeffagency.config.paths import config_dir_path
 
 from .dependencies import get_services, require_proxy_auth
 from .ports import ApiServices
 
 router = APIRouter(prefix="/v1/connectors", tags=["mja-connectors"])
+
+_CHATGPT_PROVIDER_ID = "openai"
 
 _STORE_PATH = config_dir_path() / "connectors.json"
 _STATE_PATH = config_dir_path() / "connector_oauth_states.json"
@@ -551,6 +554,16 @@ async def list_connectors(
     store = _credentials()
     settings = services.requests.current_settings()
     opencode_ready = bool(getattr(settings, "opencode_api_keys", ()))
+    gemini_ready = bool(getattr(settings, "gemini_api_keys", ()))
+    chatgpt_ready = False
+    try:
+        chatgpt_status = await services.admin.connected_account_status(
+            _CHATGPT_PROVIDER_ID
+        )
+        chatgpt_ready = bool(chatgpt_status.connected)
+    except Exception:
+        # Connected-account storage may be unavailable on older installs.
+        chatgpt_ready = False
     connectors = [
         {
             "id": name,
@@ -569,6 +582,22 @@ async def list_connectors(
             "id": "opencode",
             "name": CONNECTOR_NAMES["opencode"],
             "configured": opencode_ready,
+            "tools": [],
+        }
+    )
+    connectors.append(
+        {
+            "id": "gemini",
+            "name": "Google AI / Gemini",
+            "configured": gemini_ready,
+            "tools": [],
+        }
+    )
+    connectors.append(
+        {
+            "id": "chatgpt",
+            "name": "ChatGPT / OpenAI",
+            "configured": chatgpt_ready,
             "tools": [],
         }
     )
@@ -615,6 +644,89 @@ async def setup_opencode(
         raise HTTPException(status_code=400, detail="OpenCode API key is required")
     result = await services.admin.apply_admin_config({"OPENCODE_API_KEY": api_key})
     return {"connector": "opencode", "result": result}
+
+
+@router.post("/gemini/setup")
+async def setup_gemini(
+    payload: dict[str, Any] = Body(...),
+    _auth=Depends(require_proxy_auth),
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """Install a Google AI Studio key through the managed config runtime."""
+    api_key = str(payload.get("api_key", "")).strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Gemini API key is required")
+    result = await services.admin.apply_admin_config({"GEMINI_API_KEY": api_key})
+    return {"connector": "gemini", "result": result}
+
+
+@router.get("/chatgpt/auth")
+async def chatgpt_auth_status(
+    _auth=Depends(require_proxy_auth),
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """Return the safe ChatGPT connected-account status for the app."""
+    status = await services.admin.connected_account_status(_CHATGPT_PROVIDER_ID)
+    return status.as_dict()
+
+
+@router.post("/chatgpt/auth/login")
+async def chatgpt_auth_login(
+    payload: dict[str, Any] | None = Body(default=None),
+    _auth=Depends(require_proxy_auth),
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """Start a browser or device-code ChatGPT sign-in from the app."""
+    values = payload or {}
+    raw_mode = str(values.get("mode") or "").strip()
+    mode: ConnectedAccountLoginMode | None = None
+    if raw_mode:
+        try:
+            mode = ConnectedAccountLoginMode(raw_mode)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="Unsupported ChatGPT login mode."
+            ) from None
+    status = await services.admin.connected_account_status(_CHATGPT_PROVIDER_ID)
+    selected = mode or status.default_login_mode
+    if selected not in status.supported_login_modes:
+        raise HTTPException(
+            status_code=422, detail="ChatGPT login mode is not supported."
+        )
+    try:
+        started = await services.admin.start_connected_account_login(
+            _CHATGPT_PROVIDER_ID, selected
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not start ChatGPT login ({type(exc).__name__}).",
+        ) from exc
+    return started.as_dict()
+
+
+@router.post("/chatgpt/auth/cancel")
+async def chatgpt_auth_cancel(
+    _auth=Depends(require_proxy_auth),
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """Cancel an in-progress ChatGPT sign-in."""
+    status = await services.admin.cancel_connected_account_login(
+        _CHATGPT_PROVIDER_ID
+    )
+    return status.as_dict()
+
+
+@router.delete("/chatgpt/auth")
+async def chatgpt_auth_disconnect(
+    _auth=Depends(require_proxy_auth),
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """Disconnect the saved ChatGPT account from the local server."""
+    status = await services.admin.disconnect_connected_account(
+        _CHATGPT_PROVIDER_ID
+    )
+    return status.as_dict()
 
 
 @router.get("/media/{name}")

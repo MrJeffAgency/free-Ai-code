@@ -7,6 +7,7 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -76,6 +77,20 @@ public class MainActivity extends Activity {
                 request.grant(resources);
             }
         });
+
+        web.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void openExternal(String url) {
+                runOnUiThread(() -> {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this,
+                                "No browser available for sign-in", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }, "MJAExternal");
 
         web.loadUrl("file:///android_asset/www/index.html");
 

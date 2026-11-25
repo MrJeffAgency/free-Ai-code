@@ -290,8 +290,28 @@
     <section class="view" id="view-connectorsettings">
       <div class="pane">
         <h3 style="margin:0">🔐 Connector settings</h3>
-        <p style="color:var(--muted);font-size:12px;margin:0">Store an API key or token for each plug locally in this app. Credentials are not sent to MJA or any service by this version.</p>
-        <p style="color:var(--muted);font-size:12px;margin:0">The AI is told which connectors have saved credentials, but never sees the values.</p>
+        <p style="color:var(--muted);font-size:12px;margin:0">Sign in with ChatGPT or add a Google AI / Gemini key below. Other plug credentials are stored in this app and sent only to your local MJA server when you tap “Push keys to server”.</p>
+        <p style="color:var(--muted);font-size:12px;margin:0">The AI is told which connectors are ready, but never sees credential values.</p>
+        <div class="card" id="chatgptAuthCard">
+          <div class="row"><div><h3 style="margin:0">💬 ChatGPT / OpenAI sign-in</h3><p id="chatgptStatus">Checking…</p></div><span class="dot" id="chatgptDot"></span></div>
+          <div class="flex" style="margin-top:9px">
+            <button class="btn sm" data-chatgpt-login="browser">Browser login</button>
+            <button class="btn ghost sm" data-chatgpt-login="device">Device code</button>
+            <button class="btn ghost sm" id="chatgptRefresh">Refresh</button>
+            <button class="btn ghost sm" id="chatgptCancel">Cancel</button>
+            <button class="btn ghost sm" id="chatgptDisconnect">Disconnect</button>
+          </div>
+          <p class="hint" id="chatgptDetail" style="margin:8px 0 0"></p>
+        </div>
+        <div class="card" id="geminiCard">
+          <div class="row"><div><h3 style="margin:0">🔷 Google AI / Gemini API</h3><p id="geminiStatus">Checking…</p></div><span class="dot" id="geminiDot"></span></div>
+          <div class="flex" style="margin-top:9px">
+            <input type="password" id="geminiKey" placeholder="Gemini API key" style="flex:1;min-width:180px" />
+            <button class="btn sm" id="geminiEnable">Save &amp; enable</button>
+            <button class="btn ghost sm" data-openkey="Google AI / Gemini">Get key</button>
+          </div>
+          <p class="hint" id="geminiDetail" style="margin:8px 0 0">Uses a Google AI Studio key. Gemini models appear in the model picker after enabling.</p>
+        </div>
         <div class="flex">
           <button class="btn sm" id="pushConnectorKeys">Push keys to server</button>
           <button class="btn ghost sm" id="refreshConnectorStatus">Refresh status</button>
@@ -417,6 +437,13 @@
   const token=()=>ls(K.token,"")||"";
   const esc=s=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
   const toast=t=>{const e=$("toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),2200)};
+  function openExternal(u){
+    if(!u)return;
+    if(window.MJAExternal&&typeof window.MJAExternal.openExternal==="function"){
+      window.MJAExternal.openExternal(u);return;
+    }
+    const w=window.open(u,"_blank");if(!w)window.location.href=u;
+  }
   function headers(){const h={"Content-Type":"application/json"};if(token())h.Authorization="Bearer "+token();return h}
   function candidates(){
     const list=[url(),"http://127.0.0.1:8083","http://localhost:8083"];
@@ -452,6 +479,8 @@
     ["Google Drive","Cloud files and documents."],
     ["Pollinations AI","Free AI image generation and optional true AI video."],
     ["OpenCode Free","Free OpenCode models through the local MJA server."],
+    ["ChatGPT / OpenAI","ChatGPT sign-in for OpenAI Codex models."],
+    ["Google AI / Gemini","Gemini models through a Google AI Studio key."],
     ["Canva","Visual design and social graphics."],
     ["Supabase","Database, auth, storage, and edge functions."],
     ["Fiverr","Freelance services and gigs."],
@@ -484,6 +513,7 @@
   let modeName=ls(K.mode,"General");if(!MODES[modeName])modeName="General";
   let prof=ls(K.profile,{name:"MrJeff",tag:"Powered by MJA · MrJeffAgency"});
   let modelList=[];let connectorTools=[];let connectorStatus={};
+  let chatgptStatus=null;let chatgptPoll=null;
   let busy=false;let controller=null;let attachments=[];let notes=ls(K.notes,[]);let editingNote=null;
   let history=[];try{history=ls(K.chat,[])}catch(e){history=[]}
   let recents=ls(K.recents,[]);let artifacts=ls(K.artifacts,[]);
@@ -624,6 +654,109 @@
       drawConnectorSettings();
       if(show)toast("Connector status refreshed");
     }catch(e){connectorTools=[];connectorStatus={};drawConnectorSettings()}
+  }
+  function drawChatgptStatus(){
+    const s=chatgptStatus;
+    const state=s&&s.state?String(s.state):"disconnected";
+    let label="Not connected",detail="Sign in with your ChatGPT / OpenAI account.";
+    if(state==="connected"){
+      label="Connected"+(s.email?" · "+s.email:"");
+      detail=s.model_count?s.model_count+" models available through this account.":"Account ready for OpenAI Codex models.";
+    }else if(state==="connecting"){
+      label="Connecting…";
+      const parts=[];
+      if(s.verification_url)parts.push("Open "+s.verification_url);
+      if(s.user_code)parts.push("Enter code "+s.user_code);
+      if(s.authorization_url)parts.push("Finish sign-in in your browser");
+      if(s.expires_at)parts.push("Expires "+time(Number(s.expires_at)*1000));
+      if(s.message)parts.push(s.message);
+      detail=parts.join(" · ")||"Waiting for sign-in to finish.";
+    }else if(state==="error"){
+      label="Sign-in error";detail=s.message||"Could not connect. Try again.";
+    }
+    if($("chatgptStatus"))$("chatgptStatus").textContent=label;
+    if($("chatgptDetail"))$("chatgptDetail").textContent=detail;
+    if($("chatgptDot"))$("chatgptDot").classList.toggle("on",!!(s&&s.connected));
+    if($("chatgptCancel"))$("chatgptCancel").style.display=state==="connecting"?"":"none";
+    if($("chatgptDisconnect"))$("chatgptDisconnect").style.display=!!(s&&s.connected)?"":"none";
+  }
+  async function loadChatgptStatus(show){
+    try{
+      const r=await fetchJSON("/v1/connectors/chatgpt/auth",{headers:headers()},9000);
+      chatgptStatus=await r.json();drawChatgptStatus();
+      if(show)toast("ChatGPT status refreshed");
+      return chatgptStatus;
+    }catch(e){
+      chatgptStatus=null;drawChatgptStatus();
+      if(show)toast(e.message||String(e));return null;
+    }
+  }
+  function scheduleChatgptPoll(){
+    if(chatgptPoll){clearInterval(chatgptPoll);chatgptPoll=null}
+    if(!chatgptStatus||chatgptStatus.state!=="connecting")return;
+    let ticks=0;
+    chatgptPoll=setInterval(async()=>{
+      ticks++;
+      const s=await loadChatgptStatus(false);
+      if(!s||s.state!=="connecting"||ticks>60){
+        if(chatgptPoll){clearInterval(chatgptPoll);chatgptPoll=null}
+        if(s&&s.connected){toast("ChatGPT connected");loadModels(true);loadConnectors(true)}
+      }
+    },2500);
+  }
+  async function chatgptLogin(mode){
+    try{
+      toast("Starting ChatGPT "+(mode==="device"?"device code":"browser")+" login…");
+      const r=await fetchJSON("/v1/connectors/chatgpt/auth/login",{method:"POST",headers:headers(),
+        body:JSON.stringify({mode})},20000);
+      chatgptStatus=await r.json();drawChatgptStatus();
+      if(mode==="device"){
+        if(chatgptStatus.verification_url)openExternal(chatgptStatus.verification_url);
+        if(chatgptStatus.user_code)toast("Code: "+chatgptStatus.user_code+" — enter it in the browser");
+      }else if(chatgptStatus.authorization_url){
+        openExternal(chatgptStatus.authorization_url);toast("Finish sign-in in your browser");
+      }
+      scheduleChatgptPoll();
+    }catch(e){toast(e.message||String(e))}
+  }
+  async function chatgptCancel(){
+    try{
+      chatgptStatus=await (await fetchJSON("/v1/connectors/chatgpt/auth/cancel",{method:"POST",headers:headers()},15000)).json();
+      if(chatgptPoll){clearInterval(chatgptPoll);chatgptPoll=null}
+      drawChatgptStatus();toast("ChatGPT login cancelled");
+    }catch(e){toast(e.message||String(e))}
+  }
+  async function chatgptDisconnect(){
+    if(!confirm("Disconnect ChatGPT / OpenAI from this MJA server?"))return;
+    try{
+      chatgptStatus=await (await fetchJSON("/v1/connectors/chatgpt/auth",{method:"DELETE",headers:headers()},15000)).json();
+      drawChatgptStatus();loadModels(true);loadConnectors(true);toast("ChatGPT disconnected");
+    }catch(e){toast(e.message||String(e))}
+  }
+  function drawGeminiStatus(){
+    const st=connectorStatus.gemini;const ready=!!(st&&st.configured);
+    if($("geminiStatus"))$("geminiStatus").textContent=ready?"Enabled · Gemini models available":"Not enabled";
+    if($("geminiDot"))$("geminiDot").classList.toggle("on",ready);
+    if($("geminiDetail"))$("geminiDetail").textContent=ready
+      ?"Gemini key is saved in the local MJA server. Refresh models if it does not appear yet."
+      :"Create a free key at Google AI Studio, paste it above, then save & enable.";
+  }
+  async function enableGemini(){
+    const input=$("geminiKey");const v=input?input.value.trim():"";
+    if(!v){toast("Paste a Gemini API key first");return}
+    try{
+      toast("Saving Gemini key…");
+      const d=await (await fetchJSON("/v1/connectors/gemini/setup",{method:"POST",headers:headers(),
+        body:JSON.stringify({api_key:v})},30000)).json();
+      const result=d.result||{};
+      if(result.applied===false){
+        toast("Gemini key rejected: "+((result.errors||[]).join("; ")||"check the key"));
+        return;
+      }
+      if(input)input.value="";
+      toast("Gemini enabled; refreshing models");
+      setTimeout(()=>{loadConnectors(true);loadModels(true)},1500);
+    }catch(e){toast(e.message||String(e))}
   }
   function renderProviders(data){
     const groups={};data.forEach(m=>{const k=(m.owned_by||"other").split("/")[0];groups[k]=(groups[k]||0)+1});
@@ -1031,7 +1164,7 @@
   function drawConnectorSettings(){
     const box=$("connectorSettingList");if(!box)return;
     box.innerHTML="";
-    PLUGS.forEach(p=>{
+    PLUGS.filter(p=>p[0]!=="ChatGPT / OpenAI"&&p[0]!=="Google AI / Gemini").forEach(p=>{
       const name=p[0],saved=!!connectors[name],id=serverConnectorId(name);
       const st=id?connectorStatus[id]:null;
       const label=id?(st&&st.configured?" · live on server":" · not live yet"):"";
@@ -1066,9 +1199,12 @@
       }catch(e){toast(e.message||String(e))}
     });
     box.querySelectorAll("[data-openkey]").forEach(b=>b.onclick=()=>{
-      const url=b.dataset.openkey==="OpenCode Free"?"https://opencode.ai/auth":"https://enter.pollinations.ai/keys";
-      const w=window.open(url,"_blank");if(!w)window.location.href=url;
+      const urls={"OpenCode Free":"https://opencode.ai/auth",
+        "Pollinations AI":"https://enter.pollinations.ai/keys",
+        "Google AI / Gemini":"https://aistudio.google.com/apikey"};
+      openExternal(urls[b.dataset.openkey]||"https://opencode.ai/auth");
     });
+    drawChatgptStatus();drawGeminiStatus();
   }
   function applyToggles(){
     $("attachBtn").style.display=tools.attach?"":"none";
@@ -1118,7 +1254,13 @@
   $("connTest").onclick=()=>{workingUrl="";loadModels(true)};
   $("openConnectorSettings").onclick=()=>switchView("connectorsettings");
   $("pushConnectorKeys").onclick=pushConnectorKeys;
-  $("refreshConnectorStatus").onclick=()=>loadConnectors(true);
+  $("refreshConnectorStatus").onclick=()=>{loadConnectors(true);loadChatgptStatus(false)};
+  document.querySelectorAll("[data-chatgpt-login]").forEach(b=>b.onclick=()=>chatgptLogin(b.dataset.chatgptLogin));
+  $("chatgptRefresh").onclick=()=>loadChatgptStatus(true);
+  $("chatgptCancel").onclick=chatgptCancel;
+  $("chatgptDisconnect").onclick=chatgptDisconnect;
+  $("geminiEnable").onclick=enableGemini;
+  Array.from(document.querySelectorAll("[data-openkey]")).filter(b=>b.dataset.openkey==="Google AI / Gemini").forEach(b=>b.onclick=()=>openExternal("https://aistudio.google.com/apikey"));
   document.querySelectorAll("[data-url]").forEach(b=>b.onclick=()=>{save(K.url,b.dataset.url);workingUrl="";
     $("setUrl").value=b.dataset.url;loadModels(true)});
   $("darkToggle").onchange=e=>{applyTheme(e.target.checked?"dark":"light")};
@@ -1138,7 +1280,7 @@
     if(v==="recents")drawRecents();if(v==="artifacts")drawArtifacts();
     if(v==="notes")drawNotes($("noteSearch").value);if(v==="profile")drawProfile();
     if(v==="tools"||v==="caps")drawToggles();if(v==="aimode")drawModes();
-    if(v==="connectorsettings")drawConnectorSettings();
+    if(v==="connectorsettings"){drawConnectorSettings();loadChatgptStatus(false)}
     if(v==="theme")applyTheme(ls(K.theme,"dark"));
     window.scrollTo(0,0);
   }
@@ -1148,7 +1290,7 @@
   applyTheme(ls(K.theme,"dark"));
   $("modeLabel").textContent=modeName+" mode";
   applyToggles();drawToggles();drawModes();drawProfile();drawRecents();drawArtifacts();drawNotes();drawChat();drawAttach();drawConnectorSettings();
-  loadModels();loadConnectors();setInterval(check,15000);
+  loadModels();loadConnectors();loadChatgptStatus(false);setInterval(check,15000);
 })();
 </script>
 </body>
